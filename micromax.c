@@ -5,6 +5,7 @@
 #include <time.h>
 #include <math.h>
 #include <mach/mach_time.h> // macOS time
+#include <stdint.h>
 
 int StartKey;
 
@@ -56,6 +57,77 @@ int root_depth;
 
 /* New global variable: the side the engine is assigned to play */
 int engine_side = EMPTY;
+
+/* ---------- New Bit-Board Code Added Below ---------- */
+
+/* Global bitboard variables for white pieces */
+unsigned long long white_pawns   = 0ULL;
+unsigned long long white_knights = 0ULL;
+unsigned long long white_bishops = 0ULL;
+unsigned long long white_rooks   = 0ULL;
+unsigned long long white_queens  = 0ULL;
+unsigned long long white_kings   = 0ULL;
+
+/* Global bitboard variables for black pieces */
+unsigned long long black_pawns   = 0ULL;
+unsigned long long black_knights = 0ULL;
+unsigned long long black_bishops = 0ULL;
+unsigned long long black_rooks   = 0ULL;
+unsigned long long black_queens  = 0ULL;
+unsigned long long black_kings   = 0ULL;
+
+/* Convert a 0x88 board square (0..127 with off-board skipped) to a bit index (0..63).
+   We map the board so that bit 0 = a1 and bit 63 = h8. */
+int square_to_bit_index(int sq) {
+    int rank = sq >> 4;   // rank 0 (top) to 7 (bottom)
+    int file = sq & 7;    // file 0 to 7
+    return (7 - rank) * 8 + file; // a1 is bit0, a8 is bit56, h8 is bit63
+}
+
+/* Update all bitboards from the board array 'b' */
+void update_bitboards() {
+    white_pawns = white_knights = white_bishops = white_rooks = white_queens = white_kings = 0ULL;
+    black_pawns = black_knights = black_bishops = black_rooks = black_queens = black_kings = 0ULL;
+    
+    int i;
+    for(i = 0; i < 128; i++) {
+        if(i & 0x88) continue;  /* Skip off-board squares */
+        int piece = b[i];
+        if(piece == 0) continue;
+        int bit = square_to_bit_index(i);
+        unsigned long long mask = 1ULL << bit;
+        int type = piece & 7;
+        if(piece & WHITE) {
+            if(type == 1)
+                white_pawns |= mask;
+            else if(type == 2)
+                white_knights |= mask;
+            else if(type == 3)
+                white_bishops |= mask;
+            else if(type == 4)
+                white_rooks |= mask;
+            else if(type == 5)
+                white_queens |= mask;
+            else if(type == 6)
+                white_kings |= mask;
+        } else if(piece & BLACK) {
+            if(type == 1)
+                black_pawns |= mask;
+            else if(type == 2)
+                black_knights |= mask;
+            else if(type == 3)
+                black_bishops |= mask;
+            else if(type == 4)
+                black_rooks |= mask;
+            else if(type == 5)
+                black_queens |= mask;
+            else if(type == 6)
+                black_kings |= mask;
+        }
+    }
+}
+
+/* ---------- End of Bit-Board Code ---------- */
 
 /* macOS GetTickCount replacement */
 unsigned long GetTickCount() {
@@ -238,6 +310,8 @@ int InitGame()
     Side = WHITE;  /* White to move first */
     Fifty = 0;
     UnderProm = -1;
+    
+    update_bitboards();  // Update bitboards after initialization
     return 0;
 }
 
@@ -275,6 +349,7 @@ int main(int argc, char **argv)
     /* Initialize engine and board state */
     InitEngine();
     InitGame();
+    update_bitboards();  // Ensure bitboards are updated at start
     GamePtr = 0;
     HistPtr = 0;
     /* Default: engine plays Black; human plays White */
@@ -289,12 +364,14 @@ int main(int argc, char **argv)
             printf("readyok\n");
         } else if(strncmp(line, "ucinewgame", 10) == 0) {
             InitGame();
+            update_bitboards();  // Update bitboards for new game
             GamePtr = 0;
             HistPtr = 0;
         } else if(strncmp(line, "position", 8) == 0) {
             /* Only support "startpos" with optional moves */
             if(strstr(line, "startpos") != NULL) {
                 InitGame();
+                update_bitboards();  // Update bitboards after position reset
                 GamePtr = 0;
                 HistPtr = 0;
                 char *moves_ptr = strstr(line, "moves");
@@ -312,6 +389,7 @@ int main(int argc, char **argv)
                         Side ^= 24;  /* toggle side */
                         GameHistory[GamePtr++] = (from << 8) | to;
                         CopyBoard(HistPtr = (HistPtr + 1) & 1023);
+                        update_bitboards();  // Update bitboards after each move
                         moves_ptr = strchr(moves_ptr, ' ');
                         if(moves_ptr == NULL)
                             break;
@@ -409,6 +487,7 @@ int main(int argc, char **argv)
                 Side ^= 24;
                 GameHistory[GamePtr++] = (K << 8) | L;
                 CopyBoard(HistPtr = (HistPtr + 1) & 1023);
+                update_bitboards();  // Update bitboards after best move applied
             } else {
                 printf("bestmove (none)\n");
             }
