@@ -1,1 +1,1 @@
-UCI Micromax with SMTS, with an option for MABS, and bit-boards
+UCI Micromax using SMTS, with an option for MABS, and bit-boards
