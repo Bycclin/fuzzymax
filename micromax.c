@@ -59,8 +59,8 @@ int root_depth;
 int engine_side = EMPTY;
 
 /* New global flag to choose search algorithm.
-   0 = standard softmax tree search,
-   1 = multi-armed bandit search */
+   0 = standard softmax tree search (SMTS),
+   1 = multi-armed bandit search (MABS) */
 int use_bandit_search = 0;
 
 /* ---------- New Bit-Board Code Added Below ---------- */
@@ -167,9 +167,9 @@ int static_eval() {
 }
 
 /*---------------------------------------------------------*/
-/* Softmax Tree Search with Principal Variation            */
+/* SMTS: Softmax Tree Search with Principal Variation      */
 /*---------------------------------------------------------*/
-double softmax_tree_search_pv(int side, int depth, int pv[], int *pv_len) {
+double SMTS(int side, int depth, int pv[], int *pv_len) {
     double beta = 1.0; /* temperature parameter */
     if(depth == 0) {
         *pv_len = 0;
@@ -217,7 +217,7 @@ double softmax_tree_search_pv(int side, int depth, int pv[], int *pv_len) {
                 b[x] = 0;
                 int local_pv[64];
                 int local_len = 0;
-                double child_val = -softmax_tree_search_pv(24 - side, depth - 1, local_pv, &local_len);
+                double child_val = -SMTS(24 - side, depth - 1, local_pv, &local_len);
                 /* Undo the move */
                 b[x] = saved_from;
                 b[y] = saved_to;
@@ -247,9 +247,9 @@ double softmax_tree_search_pv(int side, int depth, int pv[], int *pv_len) {
 }
 
 /*---------------------------------------------------------*/
-/* Multi-Armed Bandit Search with Principal Variation      */
+/* MABS: Multi-Armed Bandit Search with Principal Variation*/
 /*---------------------------------------------------------*/
-double multi_armed_bandit_search(int side, int depth, int pv[], int *pv_len) {
+double MABS(int side, int depth, int pv[], int *pv_len) {
     if(depth == 0) {
         *pv_len = 0;
         return static_eval();
@@ -324,7 +324,7 @@ double multi_armed_bandit_search(int side, int depth, int pv[], int *pv_len) {
         
         int local_pv[64];
         int local_len = 0;
-        double reward = -multi_armed_bandit_search(24 - side, depth - 1, local_pv, &local_len);
+        double reward = -MABS(24 - side, depth - 1, local_pv, &local_len);
         
         b[from] = saved_from;
         b[to] = saved_to;
@@ -373,7 +373,7 @@ int PrintResult(int s)
     differs: ;
     }
     /* One‐ply search as dummy mate/stalemate check */
-    int cnt_eval = (int) softmax_tree_search_pv(s, 1, NULL, &(int){0});
+    int cnt_eval = (int) SMTS(s, 1, NULL, &(int){0});
     if(cnt_eval == 0 && K == 0 && L == 0) {
         printf("1/2-1/2 {Stalemate}\n");
         return 2;
@@ -472,7 +472,7 @@ int main(int argc, char **argv)
     
     while(fgets(line, sizeof(line), stdin)) {
         if(strncmp(line, "uci", 3) == 0) {
-            printf("id name fuzzy-Max (micro-Max 4.8 + Softmax Tree search with PV)\n");
+            printf("id name fuzzy-Max (micro-Max 4.8 + SMTS with PV)\n");
             /* UCI option for switching search algorithm */
             printf("option name MAB type check default false\n");
             printf("uciok\n");
@@ -545,9 +545,9 @@ int main(int argc, char **argv)
                     int pv_length = 0;
                     double eval;
                     if(use_bandit_search)
-                        eval = multi_armed_bandit_search(Side, depth, pv, &pv_length);
+                        eval = MABS(Side, depth, pv, &pv_length);
                     else
-                        eval = softmax_tree_search_pv(Side, depth, pv, &pv_length);
+                        eval = SMTS(Side, depth, pv, &pv_length);
                     if (pv_length > 0) {
                         best_move_global = pv[0];
                         best_move_k = pv[0] >> 8;
@@ -578,9 +578,9 @@ int main(int argc, char **argv)
                     int pv_length = 0;
                     double eval;
                     if(use_bandit_search)
-                        eval = multi_armed_bandit_search(Side, depth, pv, &pv_length);
+                        eval = MABS(Side, depth, pv, &pv_length);
                     else
-                        eval = softmax_tree_search_pv(Side, depth, pv, &pv_length);
+                        eval = SMTS(Side, depth, pv, &pv_length);
                     if (pv_length > 0) {
                         best_move_global = pv[0];
                         best_move_k = pv[0] >> 8;
