@@ -474,12 +474,12 @@ int main(int argc, char **argv)
         if(strncmp(line, "uci", 3) == 0) {
             printf("id name fuzzy-Max (micro-Max 4.8 + Softmax Tree search with PV)\n");
             /* UCI option for switching search algorithm */
-            printf("option name UseMultiArmedBandit type check default false\n");
+            printf("option name MAB type check default false\n");
             printf("uciok\n");
         } else if(strncmp(line, "isready", 7) == 0) {
             printf("readyok\n");
         } else if(strncmp(line, "setoption", 9) == 0) {
-            if(strstr(line, "name UseMultiArmedBandit") != NULL) {
+            if(strstr(line, "name MAB") != NULL) {
                 if(strstr(line, "value true") != NULL)
                     use_bandit_search = 1;
                 else
