@@ -19,9 +19,9 @@ int Side;
 int Move;
 int PromPiece;
 int Result;
-int TimeLeft;
+int TimeLeft;   /* Time left (in milliseconds) provided by UCI "go movetime" */
 int MovesLeft;
-int MaxDepth;
+int MaxDepth = 25;  /* default search depth when no time limit is provided */
 int Post;
 int Fifty;
 int UnderProm;
@@ -53,9 +53,6 @@ char n[] = ".?+nkbrq?*?NKBRQ"; /* piece symbols */
 
 /* Global variable for root search depth */
 int root_depth;
-
-/* Global flag to indicate XBoard/CECP mode */
-int xboard_mode = 0;
 
 /* New global variable: the side the engine is assigned to play */
 int engine_side = EMPTY;
@@ -93,16 +90,19 @@ int static_eval() {
 }
 
 /*---------------------------------------------------------*/
-/* Softmax Tree Search Implementation                      */
+/* Softmax Tree Search with Principal Variation            */
 /*---------------------------------------------------------*/
-/* Recursively generates moves up to a given depth. At the   */
-/* root, the best move is stored in globals K and L.         */
-double softmax_tree_search(int side, int depth) {
+double softmax_tree_search_pv(int side, int depth, int pv[], int *pv_len) {
     double beta = 1.0; /* temperature parameter */
-    if(depth == 0) return static_eval();
+    if(depth == 0) {
+        *pv_len = 0;
+        return static_eval();
+    }
     double sum = 0.0;
     double best_val = -1e9;
-    int best_from = -1, best_to = -1;
+    int best_move = -1;
+    int best_local_pv[64];
+    int best_local_len = 0;
     int move_found = 0;
     
     int x;
@@ -128,16 +128,19 @@ double softmax_tree_search(int side, int depth) {
                 if(y < 0 || y >= 128 || (y & 0x88)) continue;  /* off board */
                 int target = b[y];
                 if(target & side) continue;  /* cannot capture own piece */
-                /* For pawns (assumed type 1) restrict forward moves */
+                /* For pawns (assumed type 1) restrict forward moves and require empty target */
                 if((piece & 7) == 1) {
                     if(side == WHITE && offset != -16) continue;
                     if(side == BLACK && offset != 16) continue;
+                    if(target != 0) continue;  // pawn forward move must be to an empty square
                 }
                 /* Make the move */
                 int saved_from = b[x], saved_to = b[y];
                 b[y] = b[x];
                 b[x] = 0;
-                double child_val = -softmax_tree_search(24 - side, depth - 1);
+                int local_pv[64];
+                int local_len = 0;
+                double child_val = -softmax_tree_search_pv(24 - side, depth - 1, local_pv, &local_len);
                 /* Undo the move */
                 b[x] = saved_from;
                 b[y] = saved_to;
@@ -146,22 +149,23 @@ double softmax_tree_search(int side, int depth) {
                 sum += weight;
                 if(child_val > best_val) {
                     best_val = child_val;
-                    best_from = x;
-                    best_to = y;
+                    best_move = (x << 8) | y;
+                    best_local_len = local_len;
+                    memcpy(best_local_pv, local_pv, best_local_len * sizeof(int));
                     move_found = 1;
                 }
             }
         }
     }
     if(!move_found) {
-        /* No legal moves: return static evaluation (checkmate/stalemate) */
+        *pv_len = 0;
         return static_eval();
     }
-    /* At the root, record the best move */
-    if(depth == root_depth) {
-        K = best_from;
-        L = best_to;
+    pv[0] = best_move;
+    for(int i = 0; i < best_local_len; i++){
+         pv[i+1] = best_local_pv[i];
     }
+    *pv_len = best_local_len + 1;
     return (1.0 / beta) * log(sum);
 }
 
@@ -170,7 +174,7 @@ double softmax_tree_search(int side, int depth) {
 /*---------------------------------------------------------*/
 int PrintResult(int s)
 {
-    int i, j, k, cnt = 0;
+    int j, k, cnt = 0;
     for(j = 2; j <= 100; j += 2) {
         for(k = 0; k < STATE; k++)
             if(HistoryBoards[HistPtr][k] != HistoryBoards[(HistPtr - (j & 1023)) & 1023][k])
@@ -182,7 +186,7 @@ int PrintResult(int s)
     differs: ;
     }
     /* One‐ply search as dummy mate/stalemate check */
-    int cnt_eval = (int) softmax_tree_search(s, 1);
+    int cnt_eval = (int) softmax_tree_search_pv(s, 1, NULL, &(int){0});
     if(cnt_eval == 0 && K == 0 && L == 0) {
         printf("1/2-1/2 {Stalemate}\n");
         return 2;
@@ -231,7 +235,7 @@ int InitGame()
         b[K_index + 16] = 18;
         b[K_index + 96] = 9;
     }
-    Side = WHITE;
+    Side = WHITE;  /* White to move first */
     Fifty = 0;
     UnderProm = -1;
     return 0;
@@ -258,225 +262,160 @@ void format_move(int sq, char *buf) {
 }
 
 /*---------------------------------------------------------*/
-/* main: Command loop for XBoard/CECP protocol              */
+/* main: Command loop for UCI protocol                     */
 /*---------------------------------------------------------*/
 int main(int argc, char **argv)
 {
-    int Computer, MaxTime, MaxMoves, TimeInc, sec, i;
-    char line[256], command[256];
-    int m, nr;
-    
-    if(argc > 1 && sscanf(argv[1], "%d", &m) == 1)
-        ; // parameter U is unused in this softmax version
-    signal(SIGINT, SIG_IGN);
+    char line[256];
+    int from, to;
 
-    /* Set stdout unbuffered to ensure immediate output to XBoard */
+    /* Set stdout unbuffered so that output is immediately sent to the GUI */
     setbuf(stdout, NULL);
 
-    printf("tellics say     micro-Max 4.8 (Softmax Tree Search version)\n");
-    printf("tellics say     by H.G. Muller (modified)\n");
-
+    /* Initialize engine and board state */
     InitEngine();
     InitGame();
-    /* Default: human is White so engine plays Black */
+    GamePtr = 0;
+    HistPtr = 0;
+    /* Default: engine plays Black; human plays White */
     engine_side = BLACK;
-    Computer = engine_side;
-    MaxTime  = 10000;  /* 10 sec */
-    MaxDepth = 4;      /* reduced depth for softmax search */
     
-    for (;;) {
-        fflush(stdout);
-        
-        /* If it's the engine’s turn, only move if Side matches engine_side */
-        if(Side == Computer) {
+    while(fgets(line, sizeof(line), stdin)) {
+        if(strncmp(line, "uci", 3) == 0) {
+            printf("id name fuzzy-Max (micro-Max 4.8 + Softmax Tree search with PV)\n");
+            /* UCI options could be printed here if needed */
+            printf("uciok\n");
+        } else if(strncmp(line, "isready", 7) == 0) {
+            printf("readyok\n");
+        } else if(strncmp(line, "ucinewgame", 10) == 0) {
+            InitGame();
+            GamePtr = 0;
+            HistPtr = 0;
+        } else if(strncmp(line, "position", 8) == 0) {
+            /* Only support "startpos" with optional moves */
+            if(strstr(line, "startpos") != NULL) {
+                InitGame();
+                GamePtr = 0;
+                HistPtr = 0;
+                char *moves_ptr = strstr(line, "moves");
+                if(moves_ptr != NULL) {
+                    moves_ptr += 6; // skip "moves "
+                    char move[10];
+                    while(sscanf(moves_ptr, "%s", move) == 1) {
+                        if(strlen(move) < 4)
+                            break;
+                        from = (move[0]-'a') + (8 - (move[1]-'0')) * 16;
+                        to   = (move[2]-'a') + (8 - (move[3]-'0')) * 16;
+                        /* Apply move */
+                        b[to] = b[from];
+                        b[from] = 0;
+                        Side ^= 24;  /* toggle side */
+                        GameHistory[GamePtr++] = (from << 8) | to;
+                        CopyBoard(HistPtr = (HistPtr + 1) & 1023);
+                        moves_ptr = strchr(moves_ptr, ' ');
+                        if(moves_ptr == NULL)
+                            break;
+                        moves_ptr++;
+                    }
+                }
+            } else if(strstr(line, "fen") != NULL) {
+                /* FEN parsing not supported in this version */
+                printf("info string FEN not supported, only startpos moves allowed\n");
+            }
+        } else if(strncmp(line, "go", 2) == 0) {
+            /* Parse movetime if provided */
             Ticks = GetTickCount();
-            m = MovesLeft <= 0 ? 40 : MovesLeft;
-            tlim = 0.6 * (TimeLeft + ((m - 1) * 0)) / (m + 7); /* simplified time control */
-            PromPiece = 'q';
-            /* Set root depth for softmax search */
-            root_depth = MaxDepth;
-            /* Compute move */
-            softmax_tree_search(Side, MaxDepth);
-            if(K >= 0 && L >= 0) {
-                /* Toggle side after move */
+            TimeLeft = 0; // reset time limit
+            char *movetime_ptr = strstr(line, "movetime");
+            if(movetime_ptr != NULL) {
+                movetime_ptr += 9; // skip "movetime " (8 letters + space)
+                TimeLeft = atoi(movetime_ptr);
+            }
+            
+            int best_move_global = -1;
+            int best_move_k = 0, best_move_l = 0;
+            int best_pv[64];
+            int best_pv_length = 0;
+            
+            /* If no time limit is given, use the fixed MaxDepth */
+            if(TimeLeft == 0) {
+                for (int depth = 1; depth <= MaxDepth; depth++) {
+                    int pv[64];
+                    int pv_length = 0;
+                    double eval = softmax_tree_search_pv(Side, depth, pv, &pv_length);
+                    if (pv_length > 0) {
+                        best_move_global = pv[0];
+                        best_move_k = pv[0] >> 8;
+                        best_move_l = pv[0] & 0xFF;
+                        memcpy(best_pv, pv, pv_length * sizeof(int));
+                        best_pv_length = pv_length;
+                    }
+                    char pv_str[256] = "";
+                    char move_str[10];
+                    char fromStr[3], toStr[3];
+                    for (int i = 0; i < pv_length; i++) {
+                        int move = pv[i];
+                        format_move(move >> 8, fromStr);
+                        format_move(move & 0xFF, toStr);
+                        sprintf(move_str, "%s%s", fromStr, toStr);
+                        strcat(pv_str, move_str);
+                        if(i < pv_length - 1)
+                            strcat(pv_str, " ");
+                    }
+                    printf("info depth %d pv %s eval %f\n", depth, pv_str, eval);
+                }
+            } else {
+                /* Iterative deepening using time control */
+                int depth = 0;
+                while (1) {
+                    depth++;
+                    int pv[64];
+                    int pv_length = 0;
+                    double eval = softmax_tree_search_pv(Side, depth, pv, &pv_length);
+                    if (pv_length > 0) {
+                        best_move_global = pv[0];
+                        best_move_k = pv[0] >> 8;
+                        best_move_l = pv[0] & 0xFF;
+                        memcpy(best_pv, pv, pv_length * sizeof(int));
+                        best_pv_length = pv_length;
+                    }
+                    char pv_str[256] = "";
+                    char move_str[10];
+                    char fromStr[3], toStr[3];
+                    for (int i = 0; i < pv_length; i++) {
+                        int move = pv[i];
+                        format_move(move >> 8, fromStr);
+                        format_move(move & 0xFF, toStr);
+                        sprintf(move_str, "%s%s", fromStr, toStr);
+                        strcat(pv_str, move_str);
+                        if(i < pv_length - 1)
+                            strcat(pv_str, " ");
+                    }
+                    printf("info depth %d pv %s eval %f\n", depth, pv_str, eval);
+                    if(GetTickCount() - Ticks > TimeLeft)
+                        break;
+                }
+            }
+            if (best_pv_length > 0) {
+                K = best_move_k;
+                L = best_move_l;
+                char fromStr[3], toStr[3];
+                format_move(K, fromStr);
+                format_move(L, toStr);
+                printf("bestmove %s%s\n", fromStr, toStr);
+                /* Apply move to update board state */
+                b[L] = b[K];
+                b[K] = 0;
                 Side ^= 24;
-                if(UnderProm >= 0 && UnderProm != L) {    
-                    printf("tellics I hate under-promotions!\n");
-                    printf("resign\n");
-                    Computer = EMPTY;
-                    continue;
-                } else {
-                    UnderProm = -1;
-                }
-                {
-                    char from[3], to[3];
-                    format_move(K, from);
-                    format_move(L, to);
-                    /* Output coordinate move (only for engine_side) */
-                    if(xboard_mode)
-                        printf("move %s%s\n", from, to);
-                    else
-                        printf("move %s%s\n", from, to);
-                }
-                Ticks = GetTickCount() - Ticks;
-                TimeLeft -= Ticks;
-                if(--MovesLeft == 0) {
-                    MovesLeft = MaxMoves;
-                    TimeLeft  = MaxTime;
-                }
                 GameHistory[GamePtr++] = (K << 8) | L;
                 CopyBoard(HistPtr = (HistPtr + 1) & 1023);
-                if(PrintResult(Side))
-                    Computer = EMPTY;
             } else {
-                if(!PrintResult(Side))
-                    printf("resign\n");
-                Computer = EMPTY;
+                printf("bestmove (none)\n");
             }
-            continue;
-        }
-        if(!fgets(line, 256, stdin))
-            return 0;
-        if(line[0] == '\n')
-            continue;
-        sscanf(line, "%s", command);
-
-        /* XBoard protocol commands */
-        if(!strcmp(command, "xboard")) {
-            xboard_mode = 1;
-            continue;
-        }
-        if(!strcmp(command, "new")) {
-            InitGame();
-            GameHistory[GamePtr] = 0;
-            HistPtr = 0;
-            /* New game: human is White, so engine plays Black */
-            engine_side = BLACK;
-            Computer = engine_side;
-            TimeLeft  = MaxTime;
-            MovesLeft = MaxMoves;
-            for(nr = 0; nr < 1024; nr++)
-                memset(HistoryBoards[nr], 0, STATE);
-            continue;
-        }
-        if(!strcmp(command, "quit"))
-            return 0;
-        if(!strcmp(command, "force")) {
-            Computer = EMPTY;
-            continue;
-        }
-        /* "go" command: resume engine play using assigned engine_side */
-        if(!strcmp(command, "go")) {
-            Computer = engine_side;
-            continue;
-        }
-        if(!strcmp(command, "white")) {
-            Side = WHITE;
-            /* When human is White, engine plays Black */
-            engine_side = BLACK;
-            Computer = engine_side;
-            continue;
-        }
-        if(!strcmp(command, "black")) {
-            Side = BLACK;
-            /* When human is Black, engine plays White */
-            engine_side = WHITE;
-            Computer = engine_side;
-            continue;
-        }
-        if(!strcmp(command, "st")) {
-            Ticks = GetTickCount();
-            tlim = 1000;
-            softmax_tree_search(Side, MaxDepth);
-            if(K == 0 && L == 0)
-                continue;
-            {
-                char from[3], to[3];
-                format_move(K, from);
-                format_move(L, to);
-                printf("Hint: %s%s\n", from, to);
-            }
-            continue;
-        }
-        if(!strcmp(command, "undo") || !strcmp(command, "remove")) {
-            if(GamePtr < 1)
-                continue;
-            GameHistory[--GamePtr];
-            HistPtr = (HistPtr - 1) & 1023;
-            memset(HistoryBoards[(HistPtr + 1) & 1023], 0, STATE);
-            InitGame();
-            for(nr = 0; nr < GamePtr; nr++) {
-                int from = GameHistory[nr] >> 8;
-                int to = GameHistory[nr] & 0xFF;
-                b[to] = b[from];
-                b[from] = 0;
-                Side ^= 24;
-            }
-            continue;
-        }
-        if(!strcmp(command, "post")) {
-            Post = 1;
-            continue;
-        }
-        if(!strcmp(command, "nopost")) {
-            Post = 0;
-            continue;
-        }
-        if(!strcmp(command, "edit")) {
-            int color = WHITE;
-            while(fgets(line, 256, stdin)) {
-                m = line[0];
-                if(m == '.')
-                    break;
-                if(m == '#') {
-                    for(i = 0; i < 128; i++) b[i & 0x77] = 0;
-                    Fifty = 40;
-                    continue;
-                }
-                if(m == 'c') {
-                    color = WHITE + BLACK - color;
-                    continue;
-                }
-                if(((m=='P') || (m=='N') || (m=='B') ||
-                    (m=='R') || (m=='Q') || (m=='K')) &&
-                   (line[1] >= 'a') && (line[1] <= 'h') &&
-                   (line[2] >= '1') && (line[2] <= '8')) {
-                    int pos = (line[1] - 'a') + (8 - (line[2] - '0')) * 16;
-                    switch(line[0]) {
-                        case 'P': b[pos] = (color == WHITE) ? 9 : 18; break;
-                        case 'N': b[pos] = 3 + color; break;
-                        case 'B': b[pos] = 5 + color; break;
-                        case 'R': b[pos] = 6 + color; break;
-                        case 'Q': b[pos] = 7 + color; break;
-                        case 'K': b[pos] = 4 + color; break;
-                    }
-                    continue;
-                }
-            }
-            if(Side != color)
-                ; /* adjust evaluation if needed */
-            continue;
-        }
-        /* Otherwise, assume an input move in coordinate form */
-        if(line[0] < 'a' || line[0] > 'h' ||
-           line[1] < '1' || line[1] > '8' ||
-           line[2] < 'a' || line[2] > 'h' ||
-           line[3] < '1' || line[3] > '8')
-        {
-            printf("Error (unknown command): %s\n", command);
-        } else {
-            int from = (line[0] - 'a') + (8 - (line[1] - '0')) * 16;
-            int to   = (line[2] - 'a') + (8 - (line[3] - '0')) * 16;
-            PromPiece = line[4];
-            if(softmax_tree_search(Side, 1) != I) { /* dummy legality check */
-                printf("Illegal move: %s\n", line);
-            } else {
-                GameHistory[GamePtr++] = (from << 8) | to;
-                Side ^= 24;
-                CopyBoard(HistPtr = (HistPtr + 1) & 1023);
-                if(PrintResult(Side))
-                    Computer = EMPTY;
-            }
+        } else if(strncmp(line, "stop", 4) == 0) {
+            /* Our search is instantaneous so nothing to stop */
+        } else if(strncmp(line, "quit", 4) == 0) {
+            break;
         }
     }
     return 0;
