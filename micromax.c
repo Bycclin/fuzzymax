@@ -58,6 +58,11 @@ int root_depth;
 /* New global variable: the side the engine is assigned to play */
 int engine_side = EMPTY;
 
+/* New global flag to choose search algorithm.
+   0 = standard softmax tree search,
+   1 = multi-armed bandit search */
+int use_bandit_search = 0;
+
 /* ---------- New Bit-Board Code Added Below ---------- */
 
 /* Global bitboard variables for white pieces */
@@ -242,6 +247,116 @@ double softmax_tree_search_pv(int side, int depth, int pv[], int *pv_len) {
 }
 
 /*---------------------------------------------------------*/
+/* Multi-Armed Bandit Search with Principal Variation      */
+/*---------------------------------------------------------*/
+double multi_armed_bandit_search(int side, int depth, int pv[], int *pv_len) {
+    if(depth == 0) {
+        *pv_len = 0;
+        return static_eval();
+    }
+    
+    /* Collect all legal moves */
+    int moves[256];
+    int moves_count = 0;
+    int x;
+    for(x = 0; x < 128; x++) {
+        if(x & 0x88) continue;
+        int piece = b[x];
+        if(piece & side) {
+            int d;
+            for(d = 0; d < 8; d++) {
+                int offset;
+                switch(d) {
+                    case 0: offset = -16; break;
+                    case 1: offset = -15; break;
+                    case 2: offset = 1; break;
+                    case 3: offset = 17; break;
+                    case 4: offset = 16; break;
+                    case 5: offset = 15; break;
+                    case 6: offset = -1; break;
+                    case 7: offset = -17; break;
+                    default: offset = 0; break;
+                }
+                int y = x + offset;
+                if(y < 0 || y >= 128 || (y & 0x88)) continue;
+                int target = b[y];
+                if(target & side) continue;
+                if((piece & 7) == 1) { /* Pawn move restrictions */
+                    if(side == WHITE && offset != -16) continue;
+                    if(side == BLACK && offset != 16) continue;
+                    if(target != 0) continue;
+                }
+                moves[moves_count++] = (x << 8) | y;
+            }
+        }
+    }
+    if(moves_count == 0) {
+        *pv_len = 0;
+        return static_eval();
+    }
+    
+    /* Initialize bandit statistics */
+    int plays[256] = {0};
+    double sum_rewards[256] = {0.0};
+    double best_move_value[256] = {0.0};
+    int best_local_pvs[256][64] = {{0}};
+    int best_local_pv_lengths[256] = {0};
+    
+    int iterations = 100; // fixed number of iterations
+    for (int iter = 1; iter <= iterations; iter++) {
+        int selected = -1;
+        double best_ucb = -1e9;
+        for (int i = 0; i < moves_count; i++) {
+            double avg = (plays[i] > 0) ? (sum_rewards[i] / plays[i]) : 0;
+            double ucb = (plays[i] > 0) ? avg + sqrt(2 * log(iter) / plays[i]) : 1e9;
+            if (ucb > best_ucb) {
+                best_ucb = ucb;
+                selected = i;
+            }
+        }
+        
+        int move = moves[selected];
+        int from = move >> 8;
+        int to = move & 0xFF;
+        int saved_from = b[from], saved_to = b[to];
+        b[to] = b[from];
+        b[from] = 0;
+        
+        int local_pv[64];
+        int local_len = 0;
+        double reward = -multi_armed_bandit_search(24 - side, depth - 1, local_pv, &local_len);
+        
+        b[from] = saved_from;
+        b[to] = saved_to;
+        
+        plays[selected]++;
+        sum_rewards[selected] += reward;
+        if(plays[selected] == 1 || reward > best_move_value[selected]) {
+            best_move_value[selected] = reward;
+            best_local_pv_lengths[selected] = local_len;
+            memcpy(best_local_pvs[selected], local_pv, local_len * sizeof(int));
+        }
+    }
+    
+    /* Choose the move with the highest average reward */
+    int best_index = 0;
+    double best_avg = -1e9;
+    for (int i = 0; i < moves_count; i++) {
+        double avg = (plays[i] > 0) ? (sum_rewards[i] / plays[i]) : -1e9;
+        if (avg > best_avg) {
+            best_avg = avg;
+            best_index = i;
+        }
+    }
+    int best_move = moves[best_index];
+    pv[0] = best_move;
+    int best_local_len = best_local_pv_lengths[best_index];
+    memcpy(pv+1, best_local_pvs[best_index], best_local_len * sizeof(int));
+    *pv_len = best_local_len + 1;
+    return best_avg;
+}
+
+/*---------------------------------------------------------*/
 /* PrintResult: Check for draw/mate conditions             */
 /*---------------------------------------------------------*/
 int PrintResult(int s)
@@ -358,10 +473,18 @@ int main(int argc, char **argv)
     while(fgets(line, sizeof(line), stdin)) {
         if(strncmp(line, "uci", 3) == 0) {
             printf("id name fuzzy-Max (micro-Max 4.8 + Softmax Tree search with PV)\n");
-            /* UCI options could be printed here if needed */
+            /* UCI option for switching search algorithm */
+            printf("option name UseMultiArmedBandit type check default false\n");
             printf("uciok\n");
         } else if(strncmp(line, "isready", 7) == 0) {
             printf("readyok\n");
+        } else if(strncmp(line, "setoption", 9) == 0) {
+            if(strstr(line, "name UseMultiArmedBandit") != NULL) {
+                if(strstr(line, "value true") != NULL)
+                    use_bandit_search = 1;
+                else
+                    use_bandit_search = 0;
+            }
         } else if(strncmp(line, "ucinewgame", 10) == 0) {
             InitGame();
             update_bitboards();  // Update bitboards for new game
@@ -420,7 +543,11 @@ int main(int argc, char **argv)
                 for (int depth = 1; depth <= MaxDepth; depth++) {
                     int pv[64];
                     int pv_length = 0;
-                    double eval = softmax_tree_search_pv(Side, depth, pv, &pv_length);
+                    double eval;
+                    if(use_bandit_search)
+                        eval = multi_armed_bandit_search(Side, depth, pv, &pv_length);
+                    else
+                        eval = softmax_tree_search_pv(Side, depth, pv, &pv_length);
                     if (pv_length > 0) {
                         best_move_global = pv[0];
                         best_move_k = pv[0] >> 8;
@@ -449,7 +576,11 @@ int main(int argc, char **argv)
                     depth++;
                     int pv[64];
                     int pv_length = 0;
-                    double eval = softmax_tree_search_pv(Side, depth, pv, &pv_length);
+                    double eval;
+                    if(use_bandit_search)
+                        eval = multi_armed_bandit_search(Side, depth, pv, &pv_length);
+                    else
+                        eval = softmax_tree_search_pv(Side, depth, pv, &pv_length);
                     if (pv_length > 0) {
                         best_move_global = pv[0];
                         best_move_k = pv[0] >> 8;
