@@ -1,1 +1,1 @@
-UCI Micromax with Softmax Tree Search, and bit-boards
+UCI Micromax with SMTS, with an option for MABS, and bit-boards
