@@ -1,1 +1,1 @@
-Micromax with Softmax Tree Search
+UCI Micromax with Softmax Tree Search, and bit-boards
