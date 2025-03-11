@@ -282,14 +282,26 @@ double SMTS(int side, int depth, int pv[], int *pv_len) {
 
 /*---------------------------------------------------------*/
 /* MABS: Multi-Armed Bandit Search with Principal Variation*/
-/*---------------------------------------------------------*/
+/* 
+   In this revised version the key MAB concepts are clearly illustrated.
+   Each legal move is treated as an "arm" of a bandit.
+   The algorithm then:
+     1. Collects all legal moves.
+     2. Initializes statistics (number of plays, total rewards, and best observed reward)
+        for each arm.
+     3. Uses UCB1 (Upper Confidence Bound) to balance exploration and exploitation:
+          UCB = average_reward + sqrt(2 * log(iteration) / plays)
+     4. Simulates each selected arm for a fixed number of iterations,
+        updating the statistics based on the reward returned from recursive search.
+     5. Finally, selects the move (arm) with the highest average reward.
+---------------------------------------------------------*/
 double MABS(int side, int depth, int pv[], int *pv_len) {
     if(depth == 0) {
         *pv_len = 0;
         return static_eval();
     }
     
-    /* Collect all legal moves */
+    // Step 1: Collect all legal moves (each move is treated as an "arm" in the multi-armed bandit problem)
     int moves[256];
     int moves_count = 0;
     int x;
@@ -329,64 +341,73 @@ double MABS(int side, int depth, int pv[], int *pv_len) {
         return static_eval();
     }
     
-    /* Initialize bandit statistics */
-    int plays[256] = {0};
-    double sum_rewards[256] = {0.0};
-    double best_move_value[256] = {0.0};
-    int best_local_pvs[256][64] = {{0}};
-    int best_local_pv_lengths[256] = {0};
-    
-    int iterations = 100; // fixed number of iterations
+    // Step 2: Initialize bandit statistics for each move (arm)
+    int arm_plays[256] = {0};         // Number of times each move (arm) has been played
+    double arm_total_rewards[256] = {0.0};  // Cumulative rewards for each move (arm)
+    double arm_best_reward[256] = {0.0};    // Best observed reward for each move (arm)
+    int arm_best_pv[256][64] = {{0}};       // Best principal variation for each move (arm)
+    int arm_best_pv_len[256] = {0};           // Length of best principal variation for each move
+
+    // Step 3: Run a fixed number of iterations to simulate and update rewards for each arm using UCB1
+    int iterations = 100; // Fixed number of simulation iterations
     for (int iter = 1; iter <= iterations; iter++) {
-        int selected = -1;
-        double best_ucb = -1e9;
+        int selected_arm = -1;
+        double best_ucb = -INFINITY;
+        // UCB1 selection: choose the move (arm) with highest UCB value
         for (int i = 0; i < moves_count; i++) {
-            double avg = (plays[i] > 0) ? (sum_rewards[i] / plays[i]) : 0;
-            double ucb = (plays[i] > 0) ? avg + sqrt(2 * log(iter) / plays[i]) : 1e9;
+            double average_reward = (arm_plays[i] > 0) ? (arm_total_rewards[i] / arm_plays[i]) : 0.0;
+            // UCB1 formula: average_reward + sqrt(2 * log(iter) / arm_plays[i])
+            double ucb = (arm_plays[i] > 0) ? average_reward + sqrt(2 * log(iter) / arm_plays[i]) : INFINITY;
             if (ucb > best_ucb) {
                 best_ucb = ucb;
-                selected = i;
+                selected_arm = i;
             }
         }
         
-        int move = moves[selected];
+        // Step 3a: Simulate the selected move (arm)
+        int move = moves[selected_arm];
         int from = move >> 8;
         int to = move & 0xFF;
         int saved_from = b[from], saved_to = b[to];
         b[to] = b[from];
         b[from] = 0;
         
+        // Recursively evaluate the move using MABS (negamax style)
         int local_pv[64];
-        int local_len = 0;
-        double reward = -MABS(24 - side, depth - 1, local_pv, &local_len);
+        int local_pv_len = 0;
+        double reward = -MABS(24 - side, depth - 1, local_pv, &local_pv_len);
         
+        // Step 3b: Undo the move simulation (restore board state)
         b[from] = saved_from;
         b[to] = saved_to;
         
-        plays[selected]++;
-        sum_rewards[selected] += reward;
-        if(plays[selected] == 1 || reward > best_move_value[selected]) {
-            best_move_value[selected] = reward;
-            best_local_pv_lengths[selected] = local_len;
-            memcpy(best_local_pvs[selected], local_pv, local_len * sizeof(int));
+        // Step 3c: Update bandit statistics for the selected arm
+        arm_plays[selected_arm]++;
+        arm_total_rewards[selected_arm] += reward;
+        if (arm_plays[selected_arm] == 1 || reward > arm_best_reward[selected_arm]) {
+            arm_best_reward[selected_arm] = reward;
+            arm_best_pv_len[selected_arm] = local_pv_len;
+            memcpy(arm_best_pv[selected_arm], local_pv, local_pv_len * sizeof(int));
         }
     }
     
-    /* Choose the move with the highest average reward */
-    int best_index = 0;
-    double best_avg = -1e9;
+    // Step 4: Choose the move (arm) with the highest average reward
+    int best_arm = 0;
+    double best_avg = -INFINITY;
     for (int i = 0; i < moves_count; i++) {
-        double avg = (plays[i] > 0) ? (sum_rewards[i] / plays[i]) : -1e9;
+        double avg = (arm_plays[i] > 0) ? (arm_total_rewards[i] / arm_plays[i]) : -INFINITY;
         if (avg > best_avg) {
             best_avg = avg;
-            best_index = i;
+            best_arm = i;
         }
     }
-    int best_move = moves[best_index];
+    
+    // Step 5: Return the best move and its principal variation
+    int best_move = moves[best_arm];
     pv[0] = best_move;
-    int best_local_len = best_local_pv_lengths[best_index];
-    memcpy(pv+1, best_local_pvs[best_index], best_local_len * sizeof(int));
-    *pv_len = best_local_len + 1;
+    int best_local_pv_len = arm_best_pv_len[best_arm];
+    memcpy(pv+1, arm_best_pv[best_arm], best_local_pv_len * sizeof(int));
+    *pv_len = best_local_pv_len + 1;
     return best_avg;
 }
 
