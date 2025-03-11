@@ -168,19 +168,27 @@ int static_eval() {
 
 /*---------------------------------------------------------*/
 /* SMTS: Softmax Tree Search with Principal Variation      */
-/*---------------------------------------------------------*/
+/* 
+   This modified function illustrates the key ideas of the Python example.
+   At each node it:
+     1. Enumerates all legal moves.
+     2. Recursively computes an evaluation for each move.
+     3. Computes softmax weights from these evaluations.
+     4. Randomly samples one move (and its PV) according to those weights.
+     5. Returns a softmax-style evaluation value.
+---------------------------------------------------------*/
 double SMTS(int side, int depth, int pv[], int *pv_len) {
     double beta = 1.0; /* temperature parameter */
     if(depth == 0) {
         *pv_len = 0;
         return static_eval();
     }
-    double sum = 0.0;
-    double best_val = -1e9;
-    int best_move = -1;
-    int best_local_pv[64];
-    int best_local_len = 0;
-    int move_found = 0;
+    
+    int moves[256];
+    double child_vals[256];
+    int pv_storage[256][64];
+    int pv_lengths[256];
+    int num_moves = 0;
     
     int x;
     for(x = 0; x < 128; x++) {
@@ -222,28 +230,54 @@ double SMTS(int side, int depth, int pv[], int *pv_len) {
                 b[x] = saved_from;
                 b[y] = saved_to;
                 
-                double weight = exp(beta * child_val);
-                sum += weight;
-                if(child_val > best_val) {
-                    best_val = child_val;
-                    best_move = (x << 8) | y;
-                    best_local_len = local_len;
-                    memcpy(best_local_pv, local_pv, best_local_len * sizeof(int));
-                    move_found = 1;
-                }
+                moves[num_moves] = (x << 8) | y;
+                child_vals[num_moves] = child_val;
+                memcpy(pv_storage[num_moves], local_pv, local_len * sizeof(int));
+                pv_lengths[num_moves] = local_len;
+                num_moves++;
             }
         }
     }
-    if(!move_found) {
+    if(num_moves == 0) {
         *pv_len = 0;
         return static_eval();
     }
-    pv[0] = best_move;
-    for(int i = 0; i < best_local_len; i++){
-         pv[i+1] = best_local_pv[i];
+    
+    /* Compute softmax weights for all moves */
+    double weights[256];
+    double max_val = child_vals[0];
+    for (int i = 1; i < num_moves; i++) {
+         if(child_vals[i] > max_val)
+             max_val = child_vals[i];
     }
-    *pv_len = best_local_len + 1;
-    return (1.0 / beta) * log(sum);
+    double total_weight = 0.0;
+    for (int i = 0; i < num_moves; i++) {
+         weights[i] = exp(beta * (child_vals[i] - max_val));
+         total_weight += weights[i];
+    }
+    
+    /* Randomly sample one move according to the softmax probabilities */
+    double r = ((double) rand() / (RAND_MAX)) * total_weight;
+    int chosen_index = 0;
+    double accum = 0.0;
+    for (int i = 0; i < num_moves; i++) {
+         accum += weights[i];
+         if (accum >= r) {
+              chosen_index = i;
+              break;
+         }
+    }
+    
+    int chosen_move = moves[chosen_index];
+    pv[0] = chosen_move;
+    for(int i = 0; i < pv_lengths[chosen_index]; i++){
+         pv[i+1] = pv_storage[chosen_index][i];
+    }
+    *pv_len = pv_lengths[chosen_index] + 1;
+    
+    /* Return a softmax-style evaluation value */
+    double softmax_eval = (1.0 / beta) * log(total_weight) + max_val;
+    return softmax_eval;
 }
 
 /*---------------------------------------------------------*/
