@@ -146,7 +146,7 @@ unsigned long GetTickCount() {
 }
 
 /*---------------------------------------------------------*/
-/* Static evaluation function: simple sum over board      */
+/* Static evaluation function: simple sum over board       */
 /*---------------------------------------------------------*/
 int static_eval() {
     int score = 0;
@@ -168,15 +168,7 @@ int static_eval() {
 
 /*---------------------------------------------------------*/
 /* SMTS: Softmax Tree Search with Principal Variation      */
-/* 
-   This modified function illustrates the key ideas of the Python example.
-   At each node it:
-     1. Enumerates all legal moves.
-     2. Recursively computes an evaluation for each move.
-     3. Computes softmax weights from these evaluations.
-     4. Randomly samples one move (and its PV) according to those weights.
-     5. Returns a softmax-style evaluation value.
----------------------------------------------------------*/
+/*---------------------------------------------------------*/
 double SMTS(int side, int depth, int pv[], int *pv_len) {
     double beta = 1.0; /* temperature parameter */
     if(depth == 0) {
@@ -282,26 +274,14 @@ double SMTS(int side, int depth, int pv[], int *pv_len) {
 
 /*---------------------------------------------------------*/
 /* MABS: Multi-Armed Bandit Search with Principal Variation*/
-/* 
-   In this revised version the key MAB concepts are clearly illustrated.
-   Each legal move is treated as an "arm" of a bandit.
-   The algorithm then:
-     1. Collects all legal moves.
-     2. Initializes statistics (number of plays, total rewards, and best observed reward)
-        for each arm.
-     3. Uses UCB1 (Upper Confidence Bound) to balance exploration and exploitation:
-          UCB = average_reward + sqrt(2 * log(iteration) / plays)
-     4. Simulates each selected arm for a fixed number of iterations,
-        updating the statistics based on the reward returned from recursive search.
-     5. Finally, selects the move (arm) with the highest average reward.
----------------------------------------------------------*/
+/*---------------------------------------------------------*/
 double MABS(int side, int depth, int pv[], int *pv_len) {
     if(depth == 0) {
         *pv_len = 0;
         return static_eval();
     }
     
-    // Step 1: Collect all legal moves (each move is treated as an "arm" in the multi-armed bandit problem)
+    // Step 1: Collect all legal moves (each move is treated as an "arm")
     int moves[256];
     int moves_count = 0;
     int x;
@@ -342,29 +322,30 @@ double MABS(int side, int depth, int pv[], int *pv_len) {
     }
     
     // Step 2: Initialize bandit statistics for each move (arm)
-    int arm_plays[256] = {0};         // Number of times each move (arm) has been played
-    double arm_total_rewards[256] = {0.0};  // Cumulative rewards for each move (arm)
-    double arm_best_reward[256] = {0.0};    // Best observed reward for each move (arm)
-    int arm_best_pv[256][64] = {{0}};       // Best principal variation for each move (arm)
-    int arm_best_pv_len[256] = {0};           // Length of best principal variation for each move
+    int arm_plays[256] = {0};
+    double arm_total_rewards[256] = {0.0};
+    double arm_best_reward[256] = {0.0};
+    int arm_best_pv[256][64] = {{0}};
+    int arm_best_pv_len[256] = {0};
 
-    // Step 3: Run a fixed number of iterations to simulate and update rewards for each arm using UCB1
-    int iterations = 100; // Fixed number of simulation iterations
+    // Step 3: Run a fixed number of iterations to simulate and update rewards
+    int iterations = 100; 
     for (int iter = 1; iter <= iterations; iter++) {
         int selected_arm = -1;
         double best_ucb = -INFINITY;
-        // UCB1 selection: choose the move (arm) with highest UCB value
+        // UCB1 selection
         for (int i = 0; i < moves_count; i++) {
             double average_reward = (arm_plays[i] > 0) ? (arm_total_rewards[i] / arm_plays[i]) : 0.0;
-            // UCB1 formula: average_reward + sqrt(2 * log(iter) / arm_plays[i])
-            double ucb = (arm_plays[i] > 0) ? average_reward + sqrt(2 * log(iter) / arm_plays[i]) : INFINITY;
+            double ucb = (arm_plays[i] > 0) ? 
+                         (average_reward + sqrt(2 * log(iter) / arm_plays[i])) : 
+                         INFINITY;
             if (ucb > best_ucb) {
                 best_ucb = ucb;
                 selected_arm = i;
             }
         }
         
-        // Step 3a: Simulate the selected move (arm)
+        // Simulate the selected move
         int move = moves[selected_arm];
         int from = move >> 8;
         int to = move & 0xFF;
@@ -372,16 +353,16 @@ double MABS(int side, int depth, int pv[], int *pv_len) {
         b[to] = b[from];
         b[from] = 0;
         
-        // Recursively evaluate the move using MABS (negamax style)
+        // Recursively evaluate (negamax style)
         int local_pv[64];
         int local_pv_len = 0;
         double reward = -MABS(24 - side, depth - 1, local_pv, &local_pv_len);
         
-        // Step 3b: Undo the move simulation (restore board state)
+        // Undo
         b[from] = saved_from;
         b[to] = saved_to;
         
-        // Step 3c: Update bandit statistics for the selected arm
+        // Update statistics
         arm_plays[selected_arm]++;
         arm_total_rewards[selected_arm] += reward;
         if (arm_plays[selected_arm] == 1 || reward > arm_best_reward[selected_arm]) {
@@ -391,7 +372,7 @@ double MABS(int side, int depth, int pv[], int *pv_len) {
         }
     }
     
-    // Step 4: Choose the move (arm) with the highest average reward
+    // Step 4: Choose the move with the highest average reward
     int best_arm = 0;
     double best_avg = -INFINITY;
     for (int i = 0; i < moves_count; i++) {
@@ -448,7 +429,7 @@ int PrintResult(int s)
 }
 
 /*---------------------------------------------------------*/
-/* InitEngine: Initialize board evaluation tables         */
+/* InitEngine: Initialize board evaluation tables          */
 /*---------------------------------------------------------*/
 int InitEngine()
 {
@@ -465,7 +446,7 @@ int InitEngine()
 }
 
 /*---------------------------------------------------------*/
-/* InitGame: Set up starting position                       */
+/* InitGame: Set up starting position                      */
 /*---------------------------------------------------------*/
 int InitGame()
 {
@@ -496,14 +477,18 @@ void CopyBoard(int s)
 }
 
 /*---------------------------------------------------------*/
-/* format_move: Convert board index to a coordinate string  */
-/* (a8 is index 0, a1 is index 112)                          */
+/* format_move: Convert board index to a coordinate string */
 /*---------------------------------------------------------*/
 void format_move(int sq, char *buf) {
     buf[0] = 'a' + (sq & 7);
     buf[1] = '8' - (sq >> 4);
     buf[2] = '\0';
 }
+
+/*---------------------------------------------------------*/
+/* Global variable to track the "stop" command             */
+/*---------------------------------------------------------*/
+int stop_search = 0;
 
 /*---------------------------------------------------------*/
 /* main: Command loop for UCI protocol                     */
@@ -582,9 +567,10 @@ int main(int argc, char **argv)
             /* Parse movetime if provided */
             Ticks = GetTickCount();
             TimeLeft = 0; // reset time limit
+            stop_search = 0; // reset stop flag at start of a new search
             char *movetime_ptr = strstr(line, "movetime");
             if(movetime_ptr != NULL) {
-                movetime_ptr += 9; // skip "movetime " (8 letters + space)
+                movetime_ptr += 9; // skip "movetime "
                 TimeLeft = atoi(movetime_ptr);
             }
             
@@ -596,6 +582,7 @@ int main(int argc, char **argv)
             /* If no time limit is given, use the fixed MaxDepth */
             if(TimeLeft == 0) {
                 for (int depth = 1; depth <= MaxDepth; depth++) {
+                    if(stop_search) break;  // stop if "stop" is received
                     int pv[64];
                     int pv_length = 0;
                     double eval;
@@ -629,6 +616,7 @@ int main(int argc, char **argv)
                 int depth = 0;
                 while (1) {
                     depth++;
+                    if(stop_search) break;  // stop if "stop" is received
                     int pv[64];
                     int pv_length = 0;
                     double eval;
@@ -656,8 +644,7 @@ int main(int argc, char **argv)
                             strcat(pv_str, " ");
                     }
                     printf("info depth %d pv %s eval %f\n", depth, pv_str, eval);
-                    if(GetTickCount() - Ticks > TimeLeft)
-                        break;
+                    if(GetTickCount() - Ticks > TimeLeft) break;
                 }
             }
             if (best_pv_length > 0) {
@@ -678,7 +665,8 @@ int main(int argc, char **argv)
                 printf("bestmove (none)\n");
             }
         } else if(strncmp(line, "stop", 4) == 0) {
-            /* Our search is instantaneous so nothing to stop */
+            /* Signal that we should stop searching */
+            stop_search = 1;
         } else if(strncmp(line, "quit", 4) == 0) {
             break;
         }
