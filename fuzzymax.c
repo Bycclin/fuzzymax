@@ -205,11 +205,25 @@ double SMTS(int side, int depth, int pv[], int *pv_len) {
                 if(y < 0 || y >= 128 || (y & 0x88)) continue;  /* off board */
                 int target = b[y];
                 if(target & side) continue;  /* cannot capture own piece */
-                /* For pawns (assumed type 1) restrict forward moves and require empty target */
+                /* Pawn move logic fixes */
                 if((piece & 7) == 1) {
-                    if(side == WHITE && offset != -16) continue;
-                    if(side == BLACK && offset != 16) continue;
-                    if(target != 0) continue;  // pawn forward move must be to an empty square
+                    if(side == WHITE) {
+                        if(offset == -16) {
+                            if(target != 0) continue;  // forward move: square must be empty
+                        } else if(offset == -15 || offset == -17) {
+                            if(target == 0 || (target & WHITE)) continue;  // capture: must capture enemy
+                        } else {
+                            continue; // disallow any other offsets for pawns in single moves
+                        }
+                    } else { /* side == BLACK */
+                        if(offset == 16) {
+                            if(target != 0) continue;
+                        } else if(offset == 15 || offset == 17) {
+                            if(target == 0 || (target & BLACK)) continue;
+                        } else {
+                            continue;
+                        }
+                    }
                 }
                 /* Make the move */
                 int saved_from = b[x], saved_to = b[y];
@@ -227,6 +241,50 @@ double SMTS(int side, int depth, int pv[], int *pv_len) {
                 memcpy(pv_storage[num_moves], local_pv, local_len * sizeof(int));
                 pv_lengths[num_moves] = local_len;
                 num_moves++;
+            }
+            /* Pawn double move (two-square forward) */
+            if((piece & 7) == 1) {
+                if(side == WHITE && ((x >> 4) == 6)) {  // white pawn starting rank
+                    int y = x - 16;
+                    if(y >= 0 && y < 128 && !(y & 0x88) && b[y] == 0) {
+                        int y2 = x - 32;
+                        if(y2 >= 0 && y2 < 128 && !(y2 & 0x88) && b[y2] == 0) {
+                            moves[num_moves] = (x << 8) | y2;
+                            int saved_from = b[x], saved_to = b[y2];
+                            b[y2] = b[x];
+                            b[x] = 0;
+                            int local_pv[64];
+                            int local_len = 0;
+                            double child_val = -SMTS(24 - side, depth - 1, local_pv, &local_len);
+                            b[x] = saved_from;
+                            b[y2] = saved_to;
+                            child_vals[num_moves] = child_val;
+                            memcpy(pv_storage[num_moves], local_pv, local_len * sizeof(int));
+                            pv_lengths[num_moves] = local_len;
+                            num_moves++;
+                        }
+                    }
+                } else if(side == BLACK && ((x >> 4) == 1)) {  // black pawn starting rank
+                    int y = x + 16;
+                    if(y >= 0 && y < 128 && !(y & 0x88) && b[y] == 0) {
+                        int y2 = x + 32;
+                        if(y2 >= 0 && y2 < 128 && !(y2 & 0x88) && b[y2] == 0) {
+                            moves[num_moves] = (x << 8) | y2;
+                            int saved_from = b[x], saved_to = b[y2];
+                            b[y2] = b[x];
+                            b[x] = 0;
+                            int local_pv[64];
+                            int local_len = 0;
+                            double child_val = -SMTS(24 - side, depth - 1, local_pv, &local_len);
+                            b[x] = saved_from;
+                            b[y2] = saved_to;
+                            child_vals[num_moves] = child_val;
+                            memcpy(pv_storage[num_moves], local_pv, local_len * sizeof(int));
+                            pv_lengths[num_moves] = local_len;
+                            num_moves++;
+                        }
+                    }
+                }
             }
         }
     }
@@ -307,12 +365,47 @@ double MABS(int side, int depth, int pv[], int *pv_len) {
                 if(y < 0 || y >= 128 || (y & 0x88)) continue;
                 int target = b[y];
                 if(target & side) continue;
-                if((piece & 7) == 1) { /* Pawn move restrictions */
-                    if(side == WHITE && offset != -16) continue;
-                    if(side == BLACK && offset != 16) continue;
-                    if(target != 0) continue;
+                /* Pawn move logic fixes */
+                if((piece & 7) == 1) {
+                    if(side == WHITE) {
+                        if(offset == -16) {
+                            if(target != 0) continue;
+                        } else if(offset == -15 || offset == -17) {
+                            if(target == 0 || (target & WHITE)) continue;
+                        } else {
+                            continue;
+                        }
+                    } else { /* side == BLACK */
+                        if(offset == 16) {
+                            if(target != 0) continue;
+                        } else if(offset == 15 || offset == 17) {
+                            if(target == 0 || (target & BLACK)) continue;
+                        } else {
+                            continue;
+                        }
+                    }
                 }
                 moves[moves_count++] = (x << 8) | y;
+            }
+            /* Pawn double move for MABS */
+            if((piece & 7) == 1) {
+                if(side == WHITE && ((x >> 4) == 6)) {
+                    int y = x - 16;
+                    if(y >= 0 && y < 128 && !(y & 0x88) && b[y] == 0) {
+                        int y2 = x - 32;
+                        if(y2 >= 0 && y2 < 128 && !(y2 & 0x88) && b[y2] == 0) {
+                            moves[moves_count++] = (x << 8) | y2;
+                        }
+                    }
+                } else if(side == BLACK && ((x >> 4) == 1)) {
+                    int y = x + 16;
+                    if(y >= 0 && y < 128 && !(y & 0x88) && b[y] == 0) {
+                        int y2 = x + 32;
+                        if(y2 >= 0 && y2 < 128 && !(y2 & 0x88) && b[y2] == 0) {
+                            moves[moves_count++] = (x << 8) | y2;
+                        }
+                    }
+                }
             }
         }
     }
