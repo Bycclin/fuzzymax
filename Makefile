@@ -1,9 +1,7 @@
 # Makefile for fuzzy-Max chess engine combining fuzzymax.c and position.cpp
 
 # Compilers and flags
-CC      = gcc
 CXX     = g++
-CFLAGS  = -O2 -Wall -std=c99
 CXXFLAGS= -O2 -Wall -std=c++11
 LDFLAGS =
 
@@ -17,8 +15,8 @@ OBJS    = fuzzymax.o position.o
 all: $(TARGET)
 
 # Compile fuzzymax.c using gcc
-fuzzymax.o: fuzzymax.c
-	$(CC) $(CFLAGS) -c fuzzymax.c -o fuzzymax.o
+fuzzymax.o: fuzzymax.cc
+	$(CXX) -c fuzzymax.cc -o fuzzymax.o
 
 # Compile position.cpp using g++
 position.o: position.cpp
