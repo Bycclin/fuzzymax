@@ -29,7 +29,7 @@ struct Move {
     int from;
     int to;
     int promotion = -1;
-    // Added constructor to allow two-argument initialization.
+    // Constructor
     Move(int from, int to, int promotion = -1) : from(from), to(to), promotion(promotion) {}
 };
 
@@ -44,33 +44,40 @@ public:
     
     // Constructors and basic methods.
     Position();
-    static Position create_start_position();
-    Position rotate() const;
+    static Position* create_start_position();
+    Position* rotate() const;
     static Bitboard flip(Bitboard bb);
     
     // Move generation and game state methods.
-    std::vector<Move> genMoves() const;
-    void generateSlidingMoves(std::vector<Move>& moves, int pieceIdx, const int dir[][2], int numDirections) const;
-    void generateKnightMoves(std::vector<Move>& moves) const;
-    void generateKingMoves(std::vector<Move>& moves) const;
-    void generatePawnMoves(std::vector<Move>& moves) const;
-    Position makeMove(const Move &m) const;
+    // (The D module now exports move generation via output parameters.)
+    void genMoves(Move** outMoves, size_t* outCount) const;
+    void generateSlidingMoves(Move** outMoves, size_t* outCount, int pieceIdx, const int (*dir)[2], int numDirections) const;
+    void generateKnightMoves(Move** outMoves, size_t* outCount) const;
+    void generateKingMoves(Move** outMoves, size_t* outCount) const;
+    void generatePawnMoves(Move** outMoves, size_t* outCount) const;
+    
+    // Changed to return a pointer.
+    // --- FIX: Pass Move by value instead of by const reference to match the D export ---
+    Position* makeMove(const Move m) const;
+    
+    // (These functions are not used by our D module; the D version exports its own C string routines.)
     std::string to_string() const;
+    std::string current_turn() const;
+    bool is_in_check() const;
     
     // Game state checks.
     bool is_checkmate() const;
     bool is_stalemate() const;
     bool is_threefold_repetition() const;
     bool isInsufficientMaterial() const;
-    std::string current_turn() const;
-    bool is_in_check() const; // Declaration for check detection.
     
-    // NEW: Get Zobrist hash for the position.
+    // Zobrist hashing.
     uint64_t getZobristHash() const;
     
-    // NEW: Parse a FEN string and return the corresponding Position.
-    static Position fromFEN(const std::string &fen);
-
+    // Parse a FEN string and return the corresponding position.
+    // Note: The signature now accepts a C string.
+    static Position* fromFEN(const char* fen);
+    
     // Directional arrays.
     static const int bishopDir[4][2];
     static const int rookDir[4][2];
@@ -80,6 +87,7 @@ public:
 // -----------------------------------------------------------------------------
 // NEURAL-NET PARAMS AND ENGINE FUNCTIONS (declarations)
 // -----------------------------------------------------------------------------
+
 struct NNParams {
     std::vector<double> w1;
     std::vector<double> b1;
@@ -92,11 +100,10 @@ struct NNParams {
 bool load_weights(const std::string &filename, NNParams &params);
 bool save_weights(const std::string &filename, const NNParams &params);
 std::pair<std::vector<double>, double> forward_pass(const NNParams &params, const std::vector<double> &inputData);
-std::vector<double> position_to_input(const Position &pos);
+std::vector<double> position_to_input(const Position* pos);
 
 extern std::string currentWeightsFile;
 
-// INLINE IMPLEMENTATION for move conversion and weights file handling.
 inline std::string move_to_uci(const Move &m) {
     if (m.from < 0 || m.to < 0) return "0000";
     auto sq_to_str = [](int sq) -> std::string {
@@ -114,7 +121,6 @@ inline std::string move_to_uci_with_promotion(const Position & /* pos */, const 
     if (m.promotion != -1) {
         char prom;
         int promotionPiece = m.promotion;
-        // Adjust for black promotions.
         if (promotionPiece >= 6) {
             promotionPiece -= 6;
         }
@@ -159,19 +165,19 @@ inline void set_default_weights_file(const std::string &filename) {
 struct MCTSNode;
 
 std::pair<Move, std::vector<double>> selfplay_search_move(
-    const Position &pos,
+    const Position* pos,
     const NNParams &params,
     int moveTimeMillis,
     int iterationsPerBatch);
 
 Move iterative_deepening_search(
-    const Position &pos,
+    const Position* pos,
     const NNParams &params,
     int moveTimeMillis,
     int iterationsPerBatch);
 
 std::pair<Move, MCTSNode*> search_best_move_MCTS_with_root(
-    const Position &pos,
+    const Position* pos,
     const NNParams &params,
     int maxIters,
     std::chrono::steady_clock::time_point endTime);
