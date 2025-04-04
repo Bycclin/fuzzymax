@@ -1,4 +1,3 @@
-// position.cpp
 #include "engine.h"
 #include <iostream>
 #include <cstdint>
@@ -279,7 +278,7 @@ void Position::generateSlidingMoves(std::vector<Move>& moves, int pieceType, con
                 Bitboard toMask = 1ULL << to;
                 if ((friendly & toMask) != 0ULL)
                     break;
-                moves.push_back(Move{from, to});
+                moves.push_back(Move(from, to));
                 if ((enemy & toMask) != 0ULL)
                     break;
             }
@@ -307,7 +306,7 @@ void Position::generateKnightMoves(std::vector<Move>& moves) const {
             Bitboard toMask = 1ULL << to;
             if (friendly & toMask)
                 continue;
-            moves.push_back(Move{from, to});
+            moves.push_back(Move(from, to));
         }
     }
 }
@@ -332,7 +331,7 @@ void Position::generateKingMoves(std::vector<Move>& moves) const {
         Bitboard toMask = 1ULL << to;
         if (friendly & toMask)
             continue;
-        moves.push_back(Move{from, to});
+        moves.push_back(Move(from, to));
     }
 }
 
@@ -350,18 +349,18 @@ void Position::generatePawnMoves(std::vector<Move>& moves) const {
         int to = nr * 8 + f;
         Bitboard toMask = 1ULL << to;
         if (!(allOcc & toMask))
-            moves.push_back(Move{from, to});
+            moves.push_back(Move(from, to));
         if (f - 1 >= 0) {
             int toCap = nr * 8 + (f - 1);
             Bitboard capMask = 1ULL << toCap;
             if (enemy & capMask)
-                moves.push_back(Move{from, toCap});
+                moves.push_back(Move(from, toCap));
         }
         if (f + 1 < 8) {
             int toCap = nr * 8 + (f + 1);
             Bitboard capMask = 1ULL << toCap;
             if (enemy & capMask)
-                moves.push_back(Move{from, toCap});
+                moves.push_back(Move(from, toCap));
         }
     }
 }
