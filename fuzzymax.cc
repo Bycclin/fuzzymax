@@ -10,19 +10,18 @@
 #include <algorithm>
 #include <array>
 #include <random>
+
+// Define the global gameHashes variable.
+std::vector<uint64_t> gameHashes;
+
 bool use_bandit_search = false;
 int MaxDepth = 25;
 bool stop_search = false;
+
 std::vector<Move> getMoves(const Position* pos) {
-    Move* movesArray = nullptr;
-    size_t movesCount = 0;
-    pos->genMoves(&movesArray, &movesCount);
-    std::vector<Move> moves;
-    if (movesArray != nullptr && movesCount > 0) {
-        moves.assign(movesArray, movesArray + movesCount);
-    }
-    return moves;
+    return pos->genMoves();
 }
+
 int evaluate(const Position* pos) {
     std::array<int, 12> pieceValues = {100, 320, 330, 500, 900, 20000,
                                          -100, -320, -330, -500, -900, -20000};
@@ -32,6 +31,7 @@ int evaluate(const Position* pos) {
     }
     return score;
 }
+
 double SMTS(const Position* pos, int depth, std::vector<Move>& pv) {
     double beta = 1.0;
     if (depth == 0) {
@@ -46,9 +46,9 @@ double SMTS(const Position* pos, int depth, std::vector<Move>& pv) {
     std::vector<double> child_vals;
     std::vector<std::vector<Move>> child_pvs;
     for (auto move : moves) {
-        Position* child = pos->makeMove(move);
+        Position child = pos->makeMove(move);
         std::vector<Move> child_pv;
-        double val = -SMTS(child, depth - 1, child_pv);
+        double val = -SMTS(&child, depth - 1, child_pv);
         child_vals.push_back(val);
         child_pvs.push_back(child_pv);
     }
@@ -78,6 +78,7 @@ double SMTS(const Position* pos, int depth, std::vector<Move>& pv) {
     double softmax_eval = (1.0 / beta) * log(total_weight) + max_val;
     return softmax_eval;
 }
+
 double MABS(const Position* pos, int depth, std::vector<Move>& pv) {
     if (depth == 0) {
         pv.clear();
@@ -109,9 +110,9 @@ double MABS(const Position* pos, int depth, std::vector<Move>& pv) {
             }
         }
         Move move = moves[selected_arm];
-        Position* child = pos->makeMove(move);
+        Position child = pos->makeMove(move);
         std::vector<Move> local_pv;
-        double reward = -MABS(child, depth - 1, local_pv);
+        double reward = -MABS(&child, depth - 1, local_pv);
         arm_plays[selected_arm]++;
         arm_total_rewards[selected_arm] += reward;
         if (arm_plays[selected_arm] == 1 || reward > arm_best_reward[selected_arm]) {
@@ -120,12 +121,10 @@ double MABS(const Position* pos, int depth, std::vector<Move>& pv) {
         }
     }
     int best_arm = 0;
-    double best_avg = -std::numeric_limits<double>::infinity();
     for (int i = 0; i < n; i++) {
         double avg = (arm_plays[i] > 0) ? (arm_total_rewards[i] / arm_plays[i])
                                         : -std::numeric_limits<double>::infinity();
-        if (avg > best_avg) {
-            best_avg = avg;
+        if (avg > (arm_best_reward[best_arm])) {
             best_arm = i;
         }
     }
@@ -133,8 +132,9 @@ double MABS(const Position* pos, int depth, std::vector<Move>& pv) {
     pv.push_back(moves[best_arm]);
     for (auto m : arm_best_pv[best_arm])
         pv.push_back(m);
-    return best_avg;
+    return arm_best_reward[best_arm];
 }
+
 Move uci_to_move(const std::string &moveStr) {
     if (moveStr.size() < 4)
         return Move(-1, -1);
@@ -157,15 +157,17 @@ Move uci_to_move(const std::string &moveStr) {
     }
     return Move(from, to, promotion);
 }
+
 uint64_t get_time_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
          std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+
 extern "C" int cpp_main(int argc, char **argv) {
     using namespace std;
     ios::sync_with_stdio(false);
     string line;
-    Position* pos = Position::create_start_position();
+    Position pos = Position::create_start_position();
     int movetime = 0;
     while(getline(cin, line)) {
         if (line.substr(0, 3) == "uci") {
@@ -191,7 +193,7 @@ extern "C" int cpp_main(int argc, char **argv) {
                 if (iss >> movesToken && movesToken == "moves") {
                     while (iss >> token) {
                         Move m = uci_to_move(token);
-                        pos = pos->makeMove(m);
+                        pos = pos.makeMove(m);
                     }
                 }
             }
@@ -208,7 +210,7 @@ extern "C" int cpp_main(int argc, char **argv) {
                 if (token == "moves") {
                     while (iss >> token) {
                         Move m = uci_to_move(token);
-                        pos = pos->makeMove(m);
+                        pos = pos.makeMove(m);
                     }
                 }
             }
@@ -223,16 +225,15 @@ extern "C" int cpp_main(int argc, char **argv) {
             uint64_t start_time = get_time_ms();
             int current_depth = 0;
             std::vector<Move> best_pv;
-            double best_eval = 0.0;
             while (true) {
                 current_depth++;
                 if (stop_search) break;
                 std::vector<Move> pv;
                 double eval;
                 if (use_bandit_search)
-                    eval = MABS(pos, current_depth, pv);
+                    eval = MABS(&pos, current_depth, pv);
                 else
-                    eval = SMTS(pos, current_depth, pv);
+                    eval = SMTS(&pos, current_depth, pv);
                 
                 cout << "info depth " << current_depth << " eval " << eval << " pv ";
                 for (auto &m : pv) {
@@ -241,7 +242,6 @@ extern "C" int cpp_main(int argc, char **argv) {
                 cout << "\n";
                 
                 best_pv = pv;
-                best_eval = eval;
                 
                 if (movetime > 0) {
                     uint64_t current_time = get_time_ms();
@@ -254,7 +254,7 @@ extern "C" int cpp_main(int argc, char **argv) {
             }
             if (!best_pv.empty()) {
                 cout << "bestmove " << move_to_uci(best_pv[0]) << "\n";
-                pos = pos->makeMove(best_pv[0]);
+                pos = pos.makeMove(best_pv[0]);
             } else {
                 cout << "bestmove 0000" << "\n";
             }
@@ -275,4 +275,9 @@ extern "C" int cpp_main(int argc, char **argv) {
         }
     }
     return 0;
+}
+
+// Add the main() function to serve as the entry point.
+int main(int argc, char **argv) {
+    return cpp_main(argc, argv);
 }
