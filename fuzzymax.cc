@@ -1,3 +1,4 @@
+// fuzzymax.cc
 #include "engine.h"
 #include <iostream>
 #include <sstream>
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <random>
+#include <thread>  // Added for timer thread
 
 // Define the global gameHashes variable.
 std::vector<uint64_t> gameHashes;
@@ -33,6 +35,11 @@ int evaluate(const Position* pos) {
 }
 
 double SMTS(const Position* pos, int depth, std::vector<Move>& pv) {
+    // Check for stop condition mid-search.
+    if (stop_search) {
+        pv.clear();
+        return evaluate(pos);
+    }
     double beta = 1.0;
     if (depth == 0) {
         pv.clear();
@@ -80,6 +87,11 @@ double SMTS(const Position* pos, int depth, std::vector<Move>& pv) {
 }
 
 double MABS(const Position* pos, int depth, std::vector<Move>& pv) {
+    // Check for stop condition mid-search.
+    if (stop_search) {
+        pv.clear();
+        return evaluate(pos);
+    }
     if (depth == 0) {
         pv.clear();
         return evaluate(pos);
@@ -91,12 +103,16 @@ double MABS(const Position* pos, int depth, std::vector<Move>& pv) {
         return evaluate(pos);
     }
     int n = moves.size();
+    // Reduce iterations if time is running low.
     const int iterations = 100;
     std::vector<int> arm_plays(n, 0);
     std::vector<double> arm_total_rewards(n, 0.0);
     std::vector<double> arm_best_reward(n, -std::numeric_limits<double>::infinity());
     std::vector<std::vector<Move>> arm_best_pv(n);
     for (int iter = 1; iter <= iterations; iter++) {
+        // Early exit if time is up.
+        if (stop_search) break;
+        
         int selected_arm = -1;
         double best_ucb = -std::numeric_limits<double>::infinity();
         for (int i = 0; i < n; i++) {
@@ -124,7 +140,7 @@ double MABS(const Position* pos, int depth, std::vector<Move>& pv) {
     for (int i = 0; i < n; i++) {
         double avg = (arm_plays[i] > 0) ? (arm_total_rewards[i] / arm_plays[i])
                                         : -std::numeric_limits<double>::infinity();
-        if (avg > (arm_best_reward[best_arm])) {
+        if (avg > arm_best_reward[best_arm]) {
             best_arm = i;
         }
     }
@@ -168,9 +184,12 @@ extern "C" int cpp_main(int argc, char **argv) {
     ios::sync_with_stdio(false);
     string line;
     Position pos = Position::create_start_position();
+    // Initialize game history for new game.
+    gameHashes.clear();
+    gameHashes.push_back(pos.getZobristHash());
     int movetime = 0;
     while(getline(cin, line)) {
-        if (line.substr(0, 3) == "uci") {
+        if (line == "uci") {
             cout << "id name fuzzy-Max (SMTS & MABS integrated)" << "\n";
             cout << "option name MAB type check default false" << "\n";
             cout << "uciok" << "\n";
@@ -180,20 +199,25 @@ extern "C" int cpp_main(int argc, char **argv) {
         }
         else if (line.substr(0, 10) == "ucinewgame") {
             pos = Position::create_start_position();
+            gameHashes.clear();
+            gameHashes.push_back(pos.getZobristHash());
         }
         else if (line.substr(0, 8) == "position") {
             istringstream iss(line);
             string token;
-            iss >> token;
+            iss >> token; // "position"
             string posType;
             iss >> posType;
             if (posType == "startpos") {
                 pos = Position::create_start_position();
+                gameHashes.clear();
+                gameHashes.push_back(pos.getZobristHash());
                 string movesToken;
                 if (iss >> movesToken && movesToken == "moves") {
                     while (iss >> token) {
                         Move m = uci_to_move(token);
                         pos = pos.makeMove(m);
+                        gameHashes.push_back(pos.getZobristHash());
                     }
                 }
             }
@@ -207,22 +231,60 @@ extern "C" int cpp_main(int argc, char **argv) {
                     fen += fenParts[i] + (i + 1 < fenParts.size() ? " " : "");
                 }
                 pos = Position::fromFEN(fen.c_str());
+                gameHashes.clear();
+                gameHashes.push_back(pos.getZobristHash());
                 if (token == "moves") {
                     while (iss >> token) {
                         Move m = uci_to_move(token);
                         pos = pos.makeMove(m);
+                        gameHashes.push_back(pos.getZobristHash());
                     }
                 }
             }
         }
         else if (line.substr(0, 2) == "go") {
+            // Reset stop flag and determine movetime.
             movetime = 0;
             size_t posMovetime = line.find("movetime");
             if (posMovetime != string::npos) {
                 istringstream iss(line.substr(posMovetime + 9));
                 iss >> movetime;
             }
+            // If no explicit movetime, use remaining time from "wtime" or "btime"
+            if (movetime == 0) {
+                if (pos.side == 0) { // white to move
+                    size_t posWtime = line.find("wtime");
+                    if (posWtime != string::npos) {
+                        istringstream iss(line.substr(posWtime + 6));
+                        int wtimeVal = 0;
+                        iss >> wtimeVal;
+                        movetime = wtimeVal;
+                    }
+                } else { // black to move
+                    size_t posBtime = line.find("btime");
+                    if (posBtime != string::npos) {
+                        istringstream iss(line.substr(posBtime + 6));
+                        int btimeVal = 0;
+                        iss >> btimeVal;
+                        movetime = btimeVal;
+                    }
+                }
+            }
             uint64_t start_time = get_time_ms();
+            stop_search = false;  // Reset the stop flag before starting search
+
+            // Use one-fifteenth of the remaining time for search duration.
+            std::thread timer_thread;
+            if (movetime > 0) {
+                uint64_t searchTime = static_cast<uint64_t>(movetime) / 15;
+                timer_thread = std::thread([start_time, searchTime]() {
+                    while (get_time_ms() - start_time < searchTime) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                    stop_search = true;
+                });
+            }
+            
             int current_depth = 0;
             std::vector<Move> best_pv;
             while (true) {
@@ -235,26 +297,23 @@ extern "C" int cpp_main(int argc, char **argv) {
                 else
                     eval = SMTS(&pos, current_depth, pv);
                 
-                cout << "info depth " << current_depth << " eval " << eval << " pv ";
+                cout << "info depth " << current_depth << " score cp " << static_cast<int>(std::round(eval * 10)) << " pv ";
                 for (auto &m : pv) {
                     cout << move_to_uci(m) << " ";
                 }
-                cout << "\n";
+                cout << endl;
                 
                 best_pv = pv;
                 
-                if (movetime > 0) {
-                    uint64_t current_time = get_time_ms();
-                    if (current_time - start_time > static_cast<uint64_t>(movetime))
-                        break;
-                } else {
-                    if (current_depth >= MaxDepth)
-                        break;
-                }
+                if (movetime == 0 && current_depth >= MaxDepth)
+                    break;
             }
+            if (timer_thread.joinable())
+                timer_thread.join();
             if (!best_pv.empty()) {
                 cout << "bestmove " << move_to_uci(best_pv[0]) << "\n";
                 pos = pos.makeMove(best_pv[0]);
+                gameHashes.push_back(pos.getZobristHash());
             } else {
                 cout << "bestmove 0000" << "\n";
             }
