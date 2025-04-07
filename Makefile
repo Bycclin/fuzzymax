@@ -1,2 +1,2 @@
 all: 
-            g++ fuzzymax.cc position.cc -o fuzzymax
+	g++ fuzzymax.cc position.cc -o fuzzymax
