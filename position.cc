@@ -335,6 +335,9 @@ void Position::generateKingMoves(std::vector<Move>& moves) const {
     }
 }
 
+// -----------------------------------------------------------------------------
+// Modified generatePawnMoves: Added support for promotion moves.
+// -----------------------------------------------------------------------------
 void Position::generatePawnMoves(std::vector<Move>& moves) const {
     int offset = (side == 0 ? 0 : 6);
     Bitboard pawns = pieces[offset + 0];
@@ -348,23 +351,53 @@ void Position::generatePawnMoves(std::vector<Move>& moves) const {
             continue;
         int to = nr * 8 + f;
         Bitboard toMask = 1ULL << to;
-        if (!(allOcc & toMask))
-            moves.push_back(Move(from, to));
+        // Determine if the pawn move reaches the last rank (promotion rank)
+        bool promotion = (side == 0 && nr == 7) || (side == 1 && nr == 0);
+        if (!(allOcc & toMask)) {
+            if (promotion) {
+                // Generate promotion moves: 1-knight, 2-bishop, 3-rook, 4-queen.
+                moves.push_back(Move(from, to, 1));
+                moves.push_back(Move(from, to, 2));
+                moves.push_back(Move(from, to, 3));
+                moves.push_back(Move(from, to, 4));
+            } else {
+                moves.push_back(Move(from, to));
+            }
+        }
         if (f - 1 >= 0) {
             int toCap = nr * 8 + (f - 1);
             Bitboard capMask = 1ULL << toCap;
-            if (enemy & capMask)
-                moves.push_back(Move(from, toCap));
+            if (enemy & capMask) {
+                if (promotion) {
+                    moves.push_back(Move(from, toCap, 1));
+                    moves.push_back(Move(from, toCap, 2));
+                    moves.push_back(Move(from, toCap, 3));
+                    moves.push_back(Move(from, toCap, 4));
+                } else {
+                    moves.push_back(Move(from, toCap));
+                }
+            }
         }
         if (f + 1 < 8) {
             int toCap = nr * 8 + (f + 1);
             Bitboard capMask = 1ULL << toCap;
-            if (enemy & capMask)
-                moves.push_back(Move(from, toCap));
+            if (enemy & capMask) {
+                if (promotion) {
+                    moves.push_back(Move(from, toCap, 1));
+                    moves.push_back(Move(from, toCap, 2));
+                    moves.push_back(Move(from, toCap, 3));
+                    moves.push_back(Move(from, toCap, 4));
+                } else {
+                    moves.push_back(Move(from, toCap));
+                }
+            }
         }
     }
 }
 
+// -----------------------------------------------------------------------------
+// Modified makeMove: Handles promotion by replacing the pawn with the promoted piece.
+// -----------------------------------------------------------------------------
 Position Position::makeMove(const Move &m) const {
     Position newPos = *this;
     int offset = (side == 0 ? 0 : 6);
@@ -378,14 +411,41 @@ Position Position::makeMove(const Move &m) const {
     }
     if (movingPiece == -1)
         return newPos;
+    // Remove the piece from the origin square.
     newPos.pieces[movingPiece] &= ~(1ULL << m.from);
+    // Remove any captured enemy piece.
     for (int i = 0; i < 6; i++) {
         if (newPos.pieces[enemyOffset + i] & (1ULL << m.to)) {
             newPos.pieces[enemyOffset + i] &= ~(1ULL << m.to);
             break;
         }
     }
-    newPos.pieces[movingPiece] |= (1ULL << m.to);
+    // If this is a promotion move, place the promoted piece instead of the pawn.
+    if (m.promotion != -1) {
+        if (side == 0) { // White pawn promotion.
+            int promotionIndex;
+            switch(m.promotion) {
+                case 1: promotionIndex = 1; break; // Knight.
+                case 2: promotionIndex = 2; break; // Bishop.
+                case 3: promotionIndex = 3; break; // Rook.
+                case 4: promotionIndex = 4; break; // Queen.
+                default: promotionIndex = 4; break;
+            }
+            newPos.pieces[promotionIndex] |= (1ULL << m.to);
+        } else { // Black pawn promotion.
+            int promotionIndex;
+            switch(m.promotion) {
+                case 1: promotionIndex = 7; break; // Knight.
+                case 2: promotionIndex = 8; break; // Bishop.
+                case 3: promotionIndex = 9; break; // Rook.
+                case 4: promotionIndex = 10; break; // Queen.
+                default: promotionIndex = 10; break;
+            }
+            newPos.pieces[promotionIndex] |= (1ULL << m.to);
+        }
+    } else {
+        newPos.pieces[movingPiece] |= (1ULL << m.to);
+    }
     newPos.wOcc = newPos.pieces[0] | newPos.pieces[1] | newPos.pieces[2] |
                   newPos.pieces[3] | newPos.pieces[4] | newPos.pieces[5];
     newPos.bOcc = newPos.pieces[6] | newPos.pieces[7] | newPos.pieces[8] |
