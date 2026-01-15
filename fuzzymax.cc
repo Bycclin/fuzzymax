@@ -243,31 +243,31 @@ extern "C" int cpp_main(int argc, char **argv) {
             }
         }
         else if (line.substr(0, 2) == "go") {
-            // Reset stop flag and determine movetime.
+            // Reset stop flag and determine movetime/depth.
             movetime = 0;
-            size_t posMovetime = line.find("movetime");
-            if (posMovetime != string::npos) {
-                istringstream iss(line.substr(posMovetime + 9));
-                iss >> movetime;
+            int target_depth = MaxDepth;
+            int wtime = 0;
+            int btime = 0;
+            istringstream go_iss(line);
+            string go_token;
+            go_iss >> go_token; // "go"
+            while (go_iss >> go_token) {
+                if (go_token == "depth") {
+                    go_iss >> target_depth;
+                } else if (go_token == "movetime") {
+                    go_iss >> movetime;
+                } else if (go_token == "wtime") {
+                    go_iss >> wtime;
+                } else if (go_token == "btime") {
+                    go_iss >> btime;
+                }
             }
             // If no explicit movetime, use remaining time from "wtime" or "btime"
             if (movetime == 0) {
                 if (pos.side == 0) { // white to move
-                    size_t posWtime = line.find("wtime");
-                    if (posWtime != string::npos) {
-                        istringstream iss(line.substr(posWtime + 6));
-                        int wtimeVal = 0;
-                        iss >> wtimeVal;
-                        movetime = wtimeVal;
-                    }
+                    movetime = wtime;
                 } else { // black to move
-                    size_t posBtime = line.find("btime");
-                    if (posBtime != string::npos) {
-                        istringstream iss(line.substr(posBtime + 6));
-                        int btimeVal = 0;
-                        iss >> btimeVal;
-                        movetime = btimeVal;
-                    }
+                    movetime = btime;
                 }
             }
             uint64_t start_time = get_time_ms();
@@ -305,7 +305,7 @@ extern "C" int cpp_main(int argc, char **argv) {
                 
                 best_pv = pv;
                 
-                if (movetime == 0 && current_depth >= MaxDepth)
+                if (movetime == 0 && current_depth >= target_depth)
                     break;
             }
             if (timer_thread.joinable())
