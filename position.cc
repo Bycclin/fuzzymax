@@ -1,17 +1,19 @@
 #include "engine.h"
-#include <iostream>
-#include <cstdint>
+
+#include <algorithm>
 #include <array>
-#include <vector>
-#include <cmath>
-#include <sstream>
 #include <cctype>
-#include <random>
 #include <chrono>
+#include <cstdint>
+#include <random>
+#include <sstream>
+#include <string>
+#include <vector>
 
 // -----------------------------------------------------------------------------
 // Directional Arrays
 // -----------------------------------------------------------------------------
+
 const int Position::bishopDir[4][2] = {
     {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
 };
@@ -35,7 +37,10 @@ static bool zobristInitialized = false;
 
 static void initZobrist() {
     if (zobristInitialized) return;
-    std::mt19937_64 rng((unsigned)std::chrono::steady_clock::now().time_since_epoch().count());
+
+    std::mt19937_64 rng(static_cast<uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count()));
+
     for (int p = 0; p < 12; p++) {
         for (int sq = 0; sq < 64; sq++) {
             ZobristTable[p][sq] = rng();
@@ -47,6 +52,7 @@ static void initZobrist() {
 
 uint64_t Position::getZobristHash() const {
     initZobrist();
+
     uint64_t h = 0;
     for (int pieceType = 0; pieceType < 12; pieceType++) {
         Bitboard bb = pieces[pieceType];
@@ -66,7 +72,6 @@ uint64_t Position::getZobristHash() const {
 // Implementation of Position Methods
 // -----------------------------------------------------------------------------
 
-// Constructor: Initialize the standard starting position.
 Position::Position() {
     pieces = {
         0x000000000000FF00ULL, // White pawns
@@ -82,13 +87,13 @@ Position::Position() {
         0x0800000000000000ULL, // Black queen
         0x1000000000000000ULL  // Black king
     };
+
     wOcc = pieces[0] | pieces[1] | pieces[2] | pieces[3] | pieces[4] | pieces[5];
     bOcc = pieces[6] | pieces[7] | pieces[8] | pieces[9] | pieces[10] | pieces[11];
     allOcc = wOcc | bOcc;
-    side = 0; // White to move by default.
+    side = 0;
 }
 
-// Create and return the starting position.
 Position Position::create_start_position() {
     return Position();
 }
@@ -100,25 +105,28 @@ Position Position::rotate() const {
 Position::Bitboard Position::flip(Bitboard bb) {
     Bitboard ret = 0;
     for (int i = 0; i < 64; i++) {
-        if (bb & (1ULL << i))
+        if (bb & (1ULL << i)) {
             ret |= 1ULL << (63 - i);
+        }
     }
     return ret;
 }
 
 // -----------------------------------------------------------------------------
-// New: Check Detection
+// Check Detection (for side-to-move king)
 // -----------------------------------------------------------------------------
-bool Position::is_in_check() const {
-    // Find the king square for the side to move.
-    int kingIndex = (side == 0 ? 5 : 11);
-    if (pieces[kingIndex] == 0) return false; // Should not happen
-    int kingSquare = __builtin_ctzll(pieces[kingIndex]);
-    int kingRank = kingSquare / 8;
-    int kingFile = kingSquare % 8;
 
-    // Pawn attacks:
-    if (side == 0) { // White king: enemy black pawn (index 6)
+bool Position::is_in_check() const {
+    const int kingIndex = (side == 0 ? 5 : 11);
+    if (pieces[kingIndex] == 0) return false;
+
+    const int kingSquare = __builtin_ctzll(pieces[kingIndex]);
+    const int kingRank = kingSquare / 8;
+    const int kingFile = kingSquare % 8;
+
+    // Pawn attacks
+    if (side == 0) {
+        // White king, attacked by black pawns (index 6) from rank+1 diagonals
         if (kingRank + 1 < 8) {
             if (kingFile + 1 < 8) {
                 int sq = (kingRank + 1) * 8 + (kingFile + 1);
@@ -129,7 +137,8 @@ bool Position::is_in_check() const {
                 if (pieces[6] & (1ULL << sq)) return true;
             }
         }
-    } else { // Black king: enemy white pawn (index 0)
+    } else {
+        // Black king, attacked by white pawns (index 0) from rank-1 diagonals
         if (kingRank - 1 >= 0) {
             if (kingFile + 1 < 8) {
                 int sq = (kingRank - 1) * 8 + (kingFile + 1);
@@ -142,322 +151,355 @@ bool Position::is_in_check() const {
         }
     }
 
-    // Knight attacks.
-    int knightMoves[8][2] = {
-         {2, 1}, {1, 2}, {-1, 2}, {-2, 1},
-         {-2, -1}, {-1, -2}, {1, -2}, {2, -1}
+    // Knight attacks
+    static const int knightDeltas[8][2] = {
+        {2, 1}, {1, 2}, {-1, 2}, {-2, 1},
+        {-2, -1}, {-1, -2}, {1, -2}, {2, -1}
     };
-    for (int i = 0; i < 8; i++) {
-         int r = kingRank + knightMoves[i][0];
-         int f = kingFile + knightMoves[i][1];
-         if (r >= 0 && r < 8 && f >= 0 && f < 8) {
-             int sq = r * 8 + f;
-             if (side == 0) { // White king: enemy knight is index 7
-                 if (pieces[7] & (1ULL << sq)) return true;
-             } else { // Black king: enemy knight is index 1
-                 if (pieces[1] & (1ULL << sq)) return true;
-             }
-         }
+
+    for (const auto &d : knightDeltas) {
+        int r = kingRank + d[0];
+        int f = kingFile + d[1];
+        if (r < 0 || r >= 8 || f < 0 || f >= 8) continue;
+        int sq = r * 8 + f;
+
+        if (side == 0) {
+            // enemy black knight
+            if (pieces[7] & (1ULL << sq)) return true;
+        } else {
+            // enemy white knight
+            if (pieces[1] & (1ULL << sq)) return true;
+        }
     }
 
-    // Adjacent enemy king.
+    // Adjacent enemy king
     for (int dr = -1; dr <= 1; dr++) {
-         for (int df = -1; df <= 1; df++) {
-             if (dr == 0 && df == 0) continue;
-             int r = kingRank + dr, f = kingFile + df;
-             if (r >= 0 && r < 8 && f >= 0 && f < 8) {
-                 int sq = r * 8 + f;
-                 if (side == 0) { // White king: enemy king is index 11
-                     if (pieces[11] & (1ULL << sq)) return true;
-                 } else { // Black king: enemy king is index 5
-                     if (pieces[5] & (1ULL << sq)) return true;
-                 }
-             }
-         }
+        for (int df = -1; df <= 1; df++) {
+            if (dr == 0 && df == 0) continue;
+            int r = kingRank + dr;
+            int f = kingFile + df;
+            if (r < 0 || r >= 8 || f < 0 || f >= 8) continue;
+            int sq = r * 8 + f;
+
+            if (side == 0) {
+                if (pieces[11] & (1ULL << sq)) return true;
+            } else {
+                if (pieces[5] & (1ULL << sq)) return true;
+            }
+        }
     }
 
-    // Sliding pieces: Diagonals (enemy bishop or queen).
-    int diagDirs[4][2] = { {1,1}, {1,-1}, {-1,1}, {-1,-1} };
-    for (int i = 0; i < 4; i++) {
-         int dr = diagDirs[i][0], df = diagDirs[i][1];
-         int r = kingRank, f = kingFile;
-         while (true) {
-             r += dr; f += df;
-             if (r < 0 || r >= 8 || f < 0 || f >= 8) break;
-             int sq = r * 8 + f;
-             if ((side == 0 && ((pieces[8] | pieces[10]) & (1ULL << sq))) ||
-                 (side == 1 && ((pieces[2] | pieces[4]) & (1ULL << sq)))) {
-                 return true;
-             }
-             if ((pieces[0] | pieces[1] | pieces[2] | pieces[3] |
-                  pieces[4] | pieces[5] | pieces[6] | pieces[7] |
-                  pieces[8] | pieces[9] | pieces[10] | pieces[11]) & (1ULL << sq)) {
-                 break;
-             }
-         }
+    // Sliding attacks: diagonals (bishop/queen)
+    static const int diagDirs[4][2] = { {1,1}, {1,-1}, {-1,1}, {-1,-1} };
+    for (const auto &d : diagDirs) {
+        int r = kingRank;
+        int f = kingFile;
+        while (true) {
+            r += d[0];
+            f += d[1];
+            if (r < 0 || r >= 8 || f < 0 || f >= 8) break;
+            int sq = r * 8 + f;
+            Bitboard mask = 1ULL << sq;
+
+            if (side == 0) {
+                if ((pieces[8] | pieces[10]) & mask) return true;
+            } else {
+                if ((pieces[2] | pieces[4]) & mask) return true;
+            }
+
+            if (allOcc & mask) break;
+        }
     }
 
-    // Sliding pieces: Straights (enemy rook or queen).
-    int straightDirs[4][2] = { {1,0}, {-1,0}, {0,1}, {0,-1} };
-    for (int i = 0; i < 4; i++) {
-         int dr = straightDirs[i][0], df = straightDirs[i][1];
-         int r = kingRank, f = kingFile;
-         while (true) {
-             r += dr; f += df;
-             if (r < 0 || r >= 8 || f < 0 || f >= 8) break;
-             int sq = r * 8 + f;
-             if ((side == 0 && ((pieces[9] | pieces[10]) & (1ULL << sq))) ||
-                 (side == 1 && ((pieces[3] | pieces[4]) & (1ULL << sq)))) {
-                 return true;
-             }
-             if ((pieces[0] | pieces[1] | pieces[2] | pieces[3] |
-                  pieces[4] | pieces[5] | pieces[6] | pieces[7] |
-                  pieces[8] | pieces[9] | pieces[10] | pieces[11]) & (1ULL << sq)) {
-                 break;
-             }
-         }
+    // Sliding attacks: straights (rook/queen)
+    static const int straightDirs[4][2] = { {1,0}, {-1,0}, {0,1}, {0,-1} };
+    for (const auto &d : straightDirs) {
+        int r = kingRank;
+        int f = kingFile;
+        while (true) {
+            r += d[0];
+            f += d[1];
+            if (r < 0 || r >= 8 || f < 0 || f >= 8) break;
+            int sq = r * 8 + f;
+            Bitboard mask = 1ULL << sq;
+
+            if (side == 0) {
+                if ((pieces[9] | pieces[10]) & mask) return true;
+            } else {
+                if ((pieces[3] | pieces[4]) & mask) return true;
+            }
+
+            if (allOcc & mask) break;
+        }
     }
+
     return false;
 }
 
-bool Position::is_checkmate() const { 
-    return is_in_check() && genMoves().empty(); 
+bool Position::is_checkmate() const {
+    return is_in_check() && genMoves().empty();
 }
 
-bool Position::is_stalemate() const { 
-    return !is_in_check() && genMoves().empty(); 
+bool Position::is_stalemate() const {
+    return !is_in_check() && genMoves().empty();
 }
 
 // -----------------------------------------------------------------------------
-// Updated: Legal Move Generation Filtering Out Moves that Leave King in Check
+// Legal Move Generation: generate pseudo-legal, then filter leaving king in check
 // -----------------------------------------------------------------------------
+
 std::vector<Move> Position::genMoves() const {
-    std::vector<Move> pseudoLegalMoves;
-    // Generate pseudo–legal moves.
-    generateSlidingMoves(pseudoLegalMoves, 2, bishopDir, 4);
-    generateSlidingMoves(pseudoLegalMoves, 3, rookDir, 4);
-    generateSlidingMoves(pseudoLegalMoves, 4, queenDir, 8);
-    generateKnightMoves(pseudoLegalMoves);
-    generateKingMoves(pseudoLegalMoves);
-    generatePawnMoves(pseudoLegalMoves);
-    
-    // Filter out moves that leave the king in check.
-    std::vector<Move> legalMoves;
-    for (const Move &m : pseudoLegalMoves) {
-         Position newPos = makeMove(m);
-         if (!newPos.is_in_check()) {
-             legalMoves.push_back(m);
-         }
+    std::vector<Move> pseudo;
+    generateSlidingMoves(pseudo, 2, bishopDir, 4);
+    generateSlidingMoves(pseudo, 3, rookDir, 4);
+    generateSlidingMoves(pseudo, 4, queenDir, 8);
+    generateKnightMoves(pseudo);
+    generateKingMoves(pseudo);
+    generatePawnMoves(pseudo);
+
+    std::vector<Move> legal;
+    legal.reserve(pseudo.size());
+    for (const Move &m : pseudo) {
+        Position next = makeMove(m);
+        if (!next.is_in_check()) {
+            legal.push_back(m);
+        }
     }
-    return legalMoves;
+    return legal;
 }
 
-// -----------------------------------------------------------------------------
-// Modified generateSlidingMoves: Now with explicit occupancy checks to ensure
-// that sliding pieces (such as bishops) stop at the first friendly piece encountered.
-// -----------------------------------------------------------------------------
 void Position::generateSlidingMoves(std::vector<Move>& moves, int pieceType, const int dir[][2], int numDirections) const {
-    int offset = (side == 0 ? 0 : 6);
-    Bitboard pieceBB = pieces[offset + pieceType];
-    Bitboard friendly = (side == 0 ? wOcc : bOcc);
-    Bitboard enemy = (side == 0 ? bOcc : wOcc);
-    while (pieceBB) {
-        int from = __builtin_ctzll(pieceBB);
-        pieceBB &= pieceBB - 1;
-        int fromRank = from / 8;
-        int fromFile = from % 8;
+    const int offset = (side == 0 ? 0 : 6);
+    Bitboard bb = pieces[offset + pieceType];
+    const Bitboard friendly = (side == 0 ? wOcc : bOcc);
+    const Bitboard enemy = (side == 0 ? bOcc : wOcc);
+
+    while (bb) {
+        int from = __builtin_ctzll(bb);
+        bb &= bb - 1;
+
+        int fr = from / 8;
+        int ff = from % 8;
+
         for (int d = 0; d < numDirections; d++) {
-            int dr = dir[d][0], df = dir[d][1];
-            int r = fromRank, f = fromFile;
+            int r = fr;
+            int f = ff;
+            const int dr = dir[d][0];
+            const int df = dir[d][1];
+
             while (true) {
                 r += dr;
                 f += df;
-                if (r < 0 || r >= 8 || f < 0 || f >= 8)
-                    break;
+                if (r < 0 || r >= 8 || f < 0 || f >= 8) break;
+
                 int to = r * 8 + f;
-                Bitboard toMask = 1ULL << to;
-                if ((friendly & toMask) != 0ULL)
-                    break;
-                moves.push_back(Move(from, to));
-                if ((enemy & toMask) != 0ULL)
-                    break;
+                Bitboard mask = 1ULL << to;
+
+                if (friendly & mask) break;
+
+                moves.emplace_back(from, to);
+
+                if (enemy & mask) break;
             }
         }
     }
 }
 
 void Position::generateKnightMoves(std::vector<Move>& moves) const {
-    int offset = (side == 0 ? 0 : 6);
+    const int offset = (side == 0 ? 0 : 6);
     Bitboard knights = pieces[offset + 1];
-    Bitboard friendly = (side == 0 ? wOcc : bOcc);
+    const Bitboard friendly = (side == 0 ? wOcc : bOcc);
+
+    static const int deltas[8][2] = {
+        {2, 1}, {1, 2}, {-1, 2}, {-2, 1},
+        {-2, -1}, {-1, -2}, {1, -2}, {2, -1}
+    };
+
     while (knights) {
         int from = __builtin_ctzll(knights);
         knights &= knights - 1;
-        int r = from / 8, f = from % 8;
-        static const int knightMoves[8][2] = {
-            {2, 1}, {1, 2}, {-1, 2}, {-2, 1},
-            {-2, -1}, {-1, -2}, {1, -2}, {2, -1}
-        };
-        for (int i = 0; i < 8; i++) {
-            int nr = r + knightMoves[i][0], nf = f + knightMoves[i][1];
-            if (nr < 0 || nr >= 8 || nf < 0 || nf >= 8)
-                continue;
+
+        int r = from / 8;
+        int f = from % 8;
+
+        for (const auto &d : deltas) {
+            int nr = r + d[0];
+            int nf = f + d[1];
+            if (nr < 0 || nr >= 8 || nf < 0 || nf >= 8) continue;
+
             int to = nr * 8 + nf;
-            Bitboard toMask = 1ULL << to;
-            if (friendly & toMask)
-                continue;
-            moves.push_back(Move(from, to));
+            Bitboard mask = 1ULL << to;
+            if (friendly & mask) continue;
+
+            moves.emplace_back(from, to);
         }
     }
 }
 
 void Position::generateKingMoves(std::vector<Move>& moves) const {
-    int offset = (side == 0 ? 0 : 6);
+    const int offset = (side == 0 ? 0 : 6);
     Bitboard king = pieces[offset + 5];
-    Bitboard friendly = (side == 0 ? wOcc : bOcc);
-    if (!king)
-        return;
+    const Bitboard friendly = (side == 0 ? wOcc : bOcc);
+
+    if (!king) return;
+
     int from = __builtin_ctzll(king);
-    int r = from / 8, f = from % 8;
-    static const int kingMoves[8][2] = {
+    int r = from / 8;
+    int f = from % 8;
+
+    static const int deltas[8][2] = {
         {1,0}, {1,1}, {0,1}, {-1,1},
         {-1,0}, {-1,-1}, {0,-1}, {1,-1}
     };
-    for (int i = 0; i < 8; i++) {
-        int nr = r + kingMoves[i][0], nf = f + kingMoves[i][1];
-        if (nr < 0 || nr >= 8 || nf < 0 || nf >= 8)
-            continue;
+
+    for (const auto &d : deltas) {
+        int nr = r + d[0];
+        int nf = f + d[1];
+        if (nr < 0 || nr >= 8 || nf < 0 || nf >= 8) continue;
+
         int to = nr * 8 + nf;
-        Bitboard toMask = 1ULL << to;
-        if (friendly & toMask)
-            continue;
-        moves.push_back(Move(from, to));
+        Bitboard mask = 1ULL << to;
+        if (friendly & mask) continue;
+
+        moves.emplace_back(from, to);
     }
 }
 
-// -----------------------------------------------------------------------------
-// Modified generatePawnMoves: Added support for promotion moves.
-// -----------------------------------------------------------------------------
 void Position::generatePawnMoves(std::vector<Move>& moves) const {
-    int offset = (side == 0 ? 0 : 6);
+    const int offset = (side == 0 ? 0 : 6);
     Bitboard pawns = pieces[offset + 0];
-    Bitboard enemy = (side == 0 ? bOcc : wOcc);
+    const Bitboard enemy = (side == 0 ? bOcc : wOcc);
+
     while (pawns) {
         int from = __builtin_ctzll(pawns);
         pawns &= pawns - 1;
-        int r = from / 8, f = from % 8;
+
+        int r = from / 8;
+        int f = from % 8;
         int nr = (side == 0 ? r + 1 : r - 1);
-        if (nr < 0 || nr >= 8)
-            continue;
+        if (nr < 0 || nr >= 8) continue;
+
+        bool isPromotion = (side == 0 && nr == 7) || (side == 1 && nr == 0);
+
+        // forward one
         int to = nr * 8 + f;
         Bitboard toMask = 1ULL << to;
-        // Determine if the pawn move reaches the last rank (promotion rank)
-        bool promotion = (side == 0 && nr == 7) || (side == 1 && nr == 0);
         if (!(allOcc & toMask)) {
-            if (promotion) {
-                // Generate promotion moves: 1-knight, 2-bishop, 3-rook, 4-queen.
-                moves.push_back(Move(from, to, 1));
-                moves.push_back(Move(from, to, 2));
-                moves.push_back(Move(from, to, 3));
-                moves.push_back(Move(from, to, 4));
+            if (isPromotion) {
+                moves.emplace_back(from, to, 1);
+                moves.emplace_back(from, to, 2);
+                moves.emplace_back(from, to, 3);
+                moves.emplace_back(from, to, 4);
             } else {
-                moves.push_back(Move(from, to));
+                moves.emplace_back(from, to);
             }
         }
+
+        // captures
         if (f - 1 >= 0) {
-            int toCap = nr * 8 + (f - 1);
-            Bitboard capMask = 1ULL << toCap;
+            int cap = nr * 8 + (f - 1);
+            Bitboard capMask = 1ULL << cap;
             if (enemy & capMask) {
-                if (promotion) {
-                    moves.push_back(Move(from, toCap, 1));
-                    moves.push_back(Move(from, toCap, 2));
-                    moves.push_back(Move(from, toCap, 3));
-                    moves.push_back(Move(from, toCap, 4));
+                if (isPromotion) {
+                    moves.emplace_back(from, cap, 1);
+                    moves.emplace_back(from, cap, 2);
+                    moves.emplace_back(from, cap, 3);
+                    moves.emplace_back(from, cap, 4);
                 } else {
-                    moves.push_back(Move(from, toCap));
+                    moves.emplace_back(from, cap);
                 }
             }
         }
+
         if (f + 1 < 8) {
-            int toCap = nr * 8 + (f + 1);
-            Bitboard capMask = 1ULL << toCap;
+            int cap = nr * 8 + (f + 1);
+            Bitboard capMask = 1ULL << cap;
             if (enemy & capMask) {
-                if (promotion) {
-                    moves.push_back(Move(from, toCap, 1));
-                    moves.push_back(Move(from, toCap, 2));
-                    moves.push_back(Move(from, toCap, 3));
-                    moves.push_back(Move(from, toCap, 4));
+                if (isPromotion) {
+                    moves.emplace_back(from, cap, 1);
+                    moves.emplace_back(from, cap, 2);
+                    moves.emplace_back(from, cap, 3);
+                    moves.emplace_back(from, cap, 4);
                 } else {
-                    moves.push_back(Move(from, toCap));
+                    moves.emplace_back(from, cap);
                 }
             }
         }
     }
 }
 
-// -----------------------------------------------------------------------------
-// Modified makeMove: Handles promotion by replacing the pawn with the promoted piece.
-// -----------------------------------------------------------------------------
 Position Position::makeMove(const Move &m) const {
-    Position newPos = *this;
-    int offset = (side == 0 ? 0 : 6);
-    int enemyOffset = (side == 0 ? 6 : 0);
-    int movingPiece = -1;
+    Position next = *this;
+
+    const int offset = (side == 0 ? 0 : 6);
+    const int enemyOffset = (side == 0 ? 6 : 0);
+
+    int movingPieceIndex = -1;
     for (int i = 0; i < 6; i++) {
-        if (newPos.pieces[offset + i] & (1ULL << m.from)) {
-            movingPiece = offset + i;
+        if (next.pieces[offset + i] & (1ULL << m.from)) {
+            movingPieceIndex = offset + i;
             break;
         }
     }
-    if (movingPiece == -1)
-        return newPos;
-    // Remove the piece from the origin square.
-    newPos.pieces[movingPiece] &= ~(1ULL << m.from);
-    // Remove any captured enemy piece.
+
+    if (movingPieceIndex == -1) {
+        return next;
+    }
+
+    // remove moving piece from origin
+    next.pieces[movingPieceIndex] &= ~(1ULL << m.from);
+
+    // remove captured enemy
     for (int i = 0; i < 6; i++) {
-        if (newPos.pieces[enemyOffset + i] & (1ULL << m.to)) {
-            newPos.pieces[enemyOffset + i] &= ~(1ULL << m.to);
+        if (next.pieces[enemyOffset + i] & (1ULL << m.to)) {
+            next.pieces[enemyOffset + i] &= ~(1ULL << m.to);
             break;
         }
     }
-    // If this is a promotion move, place the promoted piece instead of the pawn.
+
+    // handle promotion: replace pawn with promoted piece
     if (m.promotion != -1) {
-        if (side == 0) { // White pawn promotion.
-            int promotionIndex;
-            switch(m.promotion) {
-                case 1: promotionIndex = 1; break; // Knight.
-                case 2: promotionIndex = 2; break; // Bishop.
-                case 3: promotionIndex = 3; break; // Rook.
-                case 4: promotionIndex = 4; break; // Queen.
-                default: promotionIndex = 4; break;
+        if (side == 0) {
+            int promoted = 4;
+            switch (m.promotion) {
+                case 1: promoted = 1; break;
+                case 2: promoted = 2; break;
+                case 3: promoted = 3; break;
+                case 4: promoted = 4; break;
+                default: promoted = 4; break;
             }
-            newPos.pieces[promotionIndex] |= (1ULL << m.to);
-        } else { // Black pawn promotion.
-            int promotionIndex;
-            switch(m.promotion) {
-                case 1: promotionIndex = 7; break; // Knight.
-                case 2: promotionIndex = 8; break; // Bishop.
-                case 3: promotionIndex = 9; break; // Rook.
-                case 4: promotionIndex = 10; break; // Queen.
-                default: promotionIndex = 10; break;
+            next.pieces[promoted] |= (1ULL << m.to);
+        } else {
+            int promoted = 10;
+            switch (m.promotion) {
+                case 1: promoted = 7; break;
+                case 2: promoted = 8; break;
+                case 3: promoted = 9; break;
+                case 4: promoted = 10; break;
+                default: promoted = 10; break;
             }
-            newPos.pieces[promotionIndex] |= (1ULL << m.to);
+            next.pieces[promoted] |= (1ULL << m.to);
         }
     } else {
-        newPos.pieces[movingPiece] |= (1ULL << m.to);
+        next.pieces[movingPieceIndex] |= (1ULL << m.to);
     }
-    newPos.wOcc = newPos.pieces[0] | newPos.pieces[1] | newPos.pieces[2] |
-                  newPos.pieces[3] | newPos.pieces[4] | newPos.pieces[5];
-    newPos.bOcc = newPos.pieces[6] | newPos.pieces[7] | newPos.pieces[8] |
-                  newPos.pieces[9] | newPos.pieces[10] | newPos.pieces[11];
-    newPos.allOcc = newPos.wOcc | newPos.bOcc;
-    newPos.side = 1 - side;
-    return newPos;
+
+    // recompute occupancies
+    next.wOcc = next.pieces[0] | next.pieces[1] | next.pieces[2] |
+                next.pieces[3] | next.pieces[4] | next.pieces[5];
+    next.bOcc = next.pieces[6] | next.pieces[7] | next.pieces[8] |
+                next.pieces[9] | next.pieces[10] | next.pieces[11];
+    next.allOcc = next.wOcc | next.bOcc;
+
+    // flip side
+    next.side = 1 - side;
+    return next;
 }
 
 std::string Position::to_string() const {
     std::string board(64, '.');
-    const char* symbols = "PNBRQKpnbrqk";
+    const char *symbols = "PNBRQKpnbrqk";
+
     for (int i = 0; i < 12; i++) {
         Bitboard bb = pieces[i];
         while (bb) {
@@ -466,6 +508,7 @@ std::string Position::to_string() const {
             board[sq] = symbols[i];
         }
     }
+
     std::string s;
     for (int rank = 7; rank >= 0; rank--) {
         for (int file = 0; file < 8; file++) {
@@ -477,71 +520,137 @@ std::string Position::to_string() const {
     return s;
 }
 
-std::string Position::current_turn() const { 
-    return (side == 0 ? "white" : "black"); 
+std::string Position::current_turn() const {
+    return (side == 0 ? "white" : "black");
 }
 
 Position Position::fromFEN(const std::string &fen) {
     Position pos;
     pos.pieces.fill(0);
+
     std::istringstream iss(fen);
-    std::string placement, activeColor, castling, enPassant;
-    int halfmove, fullmove;
+    std::string placement;
+    std::string activeColor;
+    std::string castling;
+    std::string enPassant;
+    int halfmove = 0;
+    int fullmove = 1;
+
     iss >> placement >> activeColor >> castling >> enPassant >> halfmove >> fullmove;
-    
+
     int rank = 7;
     int file = 0;
     for (char c : placement) {
         if (c == '/') {
             rank--;
             file = 0;
-        } else if (std::isdigit(c)) {
-            file += c - '0';
-        } else {
-            int square = rank * 8 + file;
-            int index = -1;
-            switch(c) {
-                case 'P': index = 0; break;
-                case 'N': index = 1; break;
-                case 'B': index = 2; break;
-                case 'R': index = 3; break;
-                case 'Q': index = 4; break;
-                case 'K': index = 5; break;
-                case 'p': index = 6; break;
-                case 'n': index = 7; break;
-                case 'b': index = 8; break;
-                case 'r': index = 9; break;
-                case 'q': index = 10; break;
-                case 'k': index = 11; break;
-            }
-            if (index != -1)
-                pos.pieces[index] |= (1ULL << square);
-            file++;
+            continue;
         }
+
+        if (std::isdigit(static_cast<unsigned char>(c))) {
+            file += c - '0';
+            continue;
+        }
+
+        int square = rank * 8 + file;
+        int index = -1;
+        switch (c) {
+            case 'P': index = 0; break;
+            case 'N': index = 1; break;
+            case 'B': index = 2; break;
+            case 'R': index = 3; break;
+            case 'Q': index = 4; break;
+            case 'K': index = 5; break;
+            case 'p': index = 6; break;
+            case 'n': index = 7; break;
+            case 'b': index = 8; break;
+            case 'r': index = 9; break;
+            case 'q': index = 10; break;
+            case 'k': index = 11; break;
+            default: break;
+        }
+        if (index != -1) {
+            pos.pieces[index] |= (1ULL << square);
+        }
+        file++;
     }
+
     pos.wOcc = pos.pieces[0] | pos.pieces[1] | pos.pieces[2] |
                pos.pieces[3] | pos.pieces[4] | pos.pieces[5];
     pos.bOcc = pos.pieces[6] | pos.pieces[7] | pos.pieces[8] |
                pos.pieces[9] | pos.pieces[10] | pos.pieces[11];
     pos.allOcc = pos.wOcc | pos.bOcc;
+
     pos.side = (activeColor == "w" ? 0 : 1);
     return pos;
 }
 
-// -----------------------------------------------------------------------------
-// New: Definitions for Missing Methods
-// -----------------------------------------------------------------------------
 bool Position::is_threefold_repetition() const {
-    extern std::vector<uint64_t> gameHashes;
-    uint64_t h = getZobristHash();
+    const uint64_t h = getZobristHash();
     int count = 0;
-    for (auto hash : gameHashes) {
-        if (hash == h) count++;
+    for (uint64_t hh : gameHashes) {
+        if (hh == h) count++;
     }
     return count >= 3;
 }
 
 bool Position::isInsufficientMaterial() const {
-    // Stub: full logic to detect insufficient material can be added.
-    return false;
+    // A conservative (and common) insufficient material test:
+    // - Any pawn, rook, or queen means mate is possible.
+    // - Otherwise, check if either side has known mating material.
+
+    auto pop = [](uint64_t bb) -> int { return __builtin_popcountll(bb); };
+
+    const int wP = pop(pieces[0]);
+    const int wN = pop(pieces[1]);
+    const int wB = pop(pieces[2]);
+    const int wR = pop(pieces[3]);
+    const int wQ = pop(pieces[4]);
+
+    const int bP = pop(pieces[6]);
+    const int bN = pop(pieces[7]);
+    const int bB = pop(pieces[8]);
+    const int bR = pop(pieces[9]);
+    const int bQ = pop(pieces[10]);
+
+    if ((wP + bP) > 0) return false;
+    if ((wR + bR) > 0) return false;
+    if ((wQ + bQ) > 0) return false;
+
+    auto bishops_have_both_colors = [](uint64_t bishopsBB) -> bool {
+        bool hasLight = false;
+        bool hasDark = false;
+        uint64_t bb = bishopsBB;
+        while (bb) {
+            int sq = __builtin_ctzll(bb);
+            bb &= bb - 1;
+            int r = sq / 8;
+            int f = sq % 8;
+            bool isLight = ((r + f) % 2) == 0;
+            if (isLight) hasLight = true;
+            else hasDark = true;
+            if (hasLight && hasDark) return true;
+        }
+        return false;
+    };
+
+    auto has_mating_material = [&](bool white) -> bool {
+        const int N = white ? wN : bN;
+        const uint64_t bishopsBB = white ? pieces[2] : pieces[8];
+
+        // Bishop + Knight
+        if (N >= 1 && pop(bishopsBB) >= 1) return true;
+
+        // Two bishops on opposite colors
+        if (pop(bishopsBB) >= 2 && bishops_have_both_colors(bishopsBB)) return true;
+
+        // Three knights can (in principle) deliver mate.
+        if (N >= 3) return true;
+
+        return false;
+    };
+
+    const bool whiteCanMate = has_mating_material(true);
+    const bool blackCanMate = has_mating_material(false);
+    return !whiteCanMate && !blackCanMate;
 }
